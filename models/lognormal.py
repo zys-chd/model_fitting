@@ -58,3 +58,10 @@ class LognormalModel(DistributionModel):
 
     def get_param_names(self):
         return ["σ (shape)", "μ (location)", "scale"]
+
+    def get_description(self):
+        return (
+            "对数正态分布用于建模乘法退化过程。\n\n"
+            "参数：μ (对数均值), σ (对数标准差)\n\n"
+            "适用：半导体寿命、疲劳裂纹扩展、维修时间建模。"
+        )

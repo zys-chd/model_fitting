@@ -48,7 +48,7 @@ class App(tk.Toplevel):
         else:
             super().__init__(parent)
         self.title("分布拟合工具")
-        self.geometry("1400x900")
+        self.geometry("1450x900")
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         style = ttk.Style(self)
         style.configure('.', font=(FONT_FAMILY, FONT_SIZE))
@@ -98,81 +98,338 @@ class App(tk.Toplevel):
 
     def _build_menu(self):
         menubar = tk.Menu(self)
+        self._menubar = menubar  # 保存引用供状态更新
+
+        # ===== 文件 =====
         fm = tk.Menu(menubar, tearoff=0)
         fm.add_command(label="加载 CSV", command=self.load_csv)
+        fm.add_command(label="加载 CSV（新窗口）", command=self._open_new_window)
         fm.add_command(label="生成测试数据", command=self.generate_and_load)
         fm.add_separator()
         fm.add_command(label="退出", command=self._on_close)
         menubar.add_cascade(label="文件", menu=fm)
+
+        # ===== 数据 =====
+        dm = tk.Menu(menubar, tearoff=0)
+        dm.add_command(label="添加列", command=self.add_selector)
+        dm.add_command(label="移除列", command=self.remove_last)
+        dm.add_separator()
+        dm.add_command(label="导出图", command=self.export_image)
+        dm.add_command(label="导出参数", command=self.export_parameters)
+        dm.add_separator()
+        # 模型子菜单
+        model_sub = tk.Menu(dm, tearoff=0)
+        self._model_radio = tk.StringVar(value=MODEL_DISPLAY[0])
+        for md in MODEL_DISPLAY:
+            model_sub.add_radiobutton(label=md, variable=self._model_radio,
+                                      value=md, command=lambda m=md: self._menu_set_model(m))
+        dm.add_cascade(label="模型选择", menu=model_sub)
+        # 变换子菜单
+        trans_sub = tk.Menu(dm, tearoff=0)
+        self._trans_radio = tk.StringVar(value='CDF')
+        for t in TRANSFORM_OPTIONS:
+            trans_sub.add_radiobutton(label=t, variable=self._trans_radio,
+                                      value=t, command=lambda v=t: self._menu_set_transform(v))
+        dm.add_cascade(label="变换选择", menu=trans_sub)
+        menubar.add_cascade(label="数据", menu=dm)
+
+        # ===== 绘图 =====
+        pm = tk.Menu(menubar, tearoff=0)
+        # X轴缩放
+        x_sub = tk.Menu(pm, tearoff=0)
+        self._xscale_radio = tk.StringVar(value='线性')
+        for s in SCALE_DISPLAY:
+            x_sub.add_radiobutton(label=s, variable=self._xscale_radio,
+                                  value=s, command=lambda v=s: self._menu_set_xscale(v))
+        pm.add_cascade(label="X 轴缩放", menu=x_sub)
+        # Y轴缩放
+        y_sub = tk.Menu(pm, tearoff=0)
+        self._yscale_radio = tk.StringVar(value='线性')
+        for s in SCALE_DISPLAY:
+            y_sub.add_radiobutton(label=s, variable=self._yscale_radio,
+                                  value=s, command=lambda v=s: self._menu_set_yscale(v))
+        pm.add_cascade(label="Y 轴缩放", menu=y_sub)
+        # 主题
+        th_sub = tk.Menu(pm, tearoff=0)
+        self._theme_radio = tk.StringVar(value='default')
+        themes = ['default', 'ggplot', 'seaborn-v0_8', 'bmh', 'fivethirtyeight', 'dark_background', 'classic']
+        for t in themes:
+            th_sub.add_radiobutton(label=t, variable=self._theme_radio,
+                                   value=t, command=lambda v=t: self._menu_set_theme(v))
+        pm.add_cascade(label="主题切换", menu=th_sub)
+        pm.add_separator()
+        pm.add_command(label="X/Y 范围设置", command=self._menu_range_dialog)
+        pm.add_command(label="取消选中", command=self._clear_selection)
+        pm.add_command(label="绘制 limit 线", command=self._draw_limit_lines)
+        menubar.add_cascade(label="绘图", menu=pm)
+
+        # ===== 关于 =====
+        am = tk.Menu(menubar, tearoff=0)
+        am.add_command(label="分布拟合工具", command=None)
+        am.add_separator()
+        am.add_command(label="支持模型（点击查看详情）：")
+        for md in MODEL_DISPLAY:
+            am.add_command(label=f"  {md}", command=lambda m=md: self._show_model_info(m))
+        am.add_separator()
+        am.add_command(label="版本: 1.0", command=None)
+        menubar.add_cascade(label="关于", menu=am)
+
         self.config(menu=menubar)
+
+    def _open_new_window(self):
+        """在新窗口中打开另一个分布拟合工具实例"""
+        path = filedialog.askopenfilename(
+            filetypes=[('CSV 文件', '*.csv'), ('所有文件', '*.*')], parent=self)
+        if path:
+            try:
+                df = pd.read_csv(path)
+            except Exception as e:
+                messagebox.showerror("加载错误", str(e), parent=self)
+                return
+            App(parent=self, dataframe=df)
+
+    def _show_model_info(self, display_name):
+        """弹窗显示模型公式和介绍（从模型实例读取）"""
+        key = MODEL_KEY_MAP.get(display_name)
+        if not key:
+            return
+        model = self.models.get(key)
+        if not model:
+            return
+        formula = f'${model.get_formula()}$'
+        desc = model.get_description()
+
+        top = tk.Toplevel(self)
+        top.title(display_name)
+        top.geometry("520x420")
+        top.resizable(False, False)
+
+        # 公式图
+        fig = Figure(figsize=(5, 0.7), dpi=100)
+        fig.set_facecolor('#f5f5f5')
+        fax = fig.add_subplot(111)
+        fax.axis('off')
+        fax.text(0.5, 0.5, formula, transform=fax.transAxes,
+                 fontsize=14, ha='center', va='center')
+        canvas = FigureCanvasTkAgg(fig, master=top)
+        canvas.get_tk_widget().pack(fill=tk.X, padx=10, pady=(10, 5))
+        canvas.draw()
+
+        # 分隔线
+        ttk.Separator(top, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=10, pady=5)
+
+        # 描述文本
+        text = tk.Text(top, wrap=tk.WORD, font=(FONT_FAMILY, 10), padx=10, pady=5,
+                       relief=tk.FLAT, bg='#f5f5f5')
+        text.insert(tk.END, desc)
+        text.config(state=tk.DISABLED)
+        scroll = ttk.Scrollbar(top, orient=tk.VERTICAL, command=text.yview)
+        text.configure(yscrollcommand=scroll.set)
+        text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(10, 0), pady=(0, 10))
+        scroll.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 10), pady=(0, 10))
+
+    def _menu_set_model(self, label):
+        self.model_var.set(label)
+        self._on_model_change()
+
+    def _menu_set_transform(self, val):
+        self.transform_mode.set(val)
+        self.update_plot()
+
+    def _menu_set_xscale(self, val):
+        self.scale_x.set(val)
+        self.update_plot()
+
+    def _menu_set_yscale(self, val):
+        self.scale_y.set(val)
+        self.update_plot()
+
+    def _menu_set_theme(self, val):
+        self.theme_var.set(val)
+        self._apply_theme()
+
+    def _menu_range_dialog(self):
+        """弹窗设置 X/Y 范围"""
+        dlg = tk.Toplevel(self)
+        dlg.title("设置 X/Y 范围")
+        dlg.geometry("300x180")
+        dlg.resizable(False, False)
+        dlg.transient(self)
+        dlg.grab_set()
+
+        f = ttk.Frame(dlg, padding=10)
+        f.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(f, text="X 最小：").grid(row=0, column=0, sticky='e', pady=3)
+        xmin_e = ttk.Entry(f, width=10)
+        xmin_e.insert(0, self.xlim_min.get())
+        xmin_e.grid(row=0, column=1, sticky='w', padx=5)
+
+        ttk.Label(f, text="X 最大：").grid(row=1, column=0, sticky='e', pady=3)
+        xmax_e = ttk.Entry(f, width=10)
+        xmax_e.insert(0, self.xlim_max.get())
+        xmax_e.grid(row=1, column=1, sticky='w', padx=5)
+
+        ttk.Label(f, text="Y 最小：").grid(row=2, column=0, sticky='e', pady=3)
+        ymin_e = ttk.Entry(f, width=10)
+        ymin_e.insert(0, self.ylim_min.get())
+        ymin_e.grid(row=2, column=1, sticky='w', padx=5)
+
+        ttk.Label(f, text="Y 最大：").grid(row=3, column=0, sticky='e', pady=3)
+        ymax_e = ttk.Entry(f, width=10)
+        ymax_e.insert(0, self.ylim_max.get())
+        ymax_e.grid(row=3, column=1, sticky='w', padx=5)
+
+        def on_confirm():
+            self.xlim_min.set(xmin_e.get())
+            self.xlim_max.set(xmax_e.get())
+            self.ylim_min.set(ymin_e.get())
+            self.ylim_max.set(ymax_e.get())
+            self.update_plot()
+            dlg.destroy()
+
+        btn_f = ttk.Frame(f)
+        btn_f.grid(row=4, column=0, columnspan=2, pady=10)
+        ttk.Button(btn_f, text="确认", command=on_confirm).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_f, text="取消", command=dlg.destroy).pack(side=tk.LEFT, padx=5)
 
     def _build_top_bar(self):
         tf = ttk.Frame(self)
         tf.pack(side=tk.TOP, fill=tk.X, padx=8, pady=8)
         self._build_column_selector(tf)
         self._build_control_panel(tf)
-        self._build_export_panel(tf)
+        self._build_plot_control_panel(tf)
 
     def _build_column_selector(self, p):
         f = ttk.LabelFrame(p, text="数值列")
-        f.pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=4)
+        f.pack(side=tk.LEFT, fill=tk.Y, padx=4, pady=4)
         self.left_inner = ttk.Frame(f)
         self.left_inner.pack()
 
     def _build_control_panel(self, p):
-        c = ttk.LabelFrame(p, text="显示控制")
-        c.pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=4)
+        c = ttk.LabelFrame(p, text="数据控制")
+        c.pack(side=tk.LEFT, fill=tk.Y, padx=4, pady=4)
 
-        # 统一使用 grid 布局对齐
         r = 0
-        ttk.Button(c, text="添加列", command=self.add_selector).grid(row=r, column=0, padx=2, pady=2, sticky='w')
-        ttk.Button(c, text="移除列", command=self.remove_last).grid(row=r, column=1, padx=2, pady=2, sticky='w')
-        r += 1
-        ttk.Separator(c, orient=tk.HORIZONTAL).grid(row=r, column=0, columnspan=4, sticky='ew', pady=4)
+        ttk.Button(c, text="添加列", command=self.add_selector).grid(row=r, column=0, sticky='w', padx=(0,1), pady=(0,1))
+        ttk.Button(c, text="移除列", command=self.remove_last).grid(row=r, column=1, sticky='w', padx=(0,1), pady=(0,1))
+        ttk.Button(c, text="导出图", command=self.export_image).grid(row=r, column=2, sticky='w', padx=(0,1), pady=(0,1))
+        ttk.Button(c, text="导出参数", command=self.export_parameters).grid(row=r, column=3, sticky='w', padx=(0,1), pady=(0,1))
         r += 1
 
-        ttk.Label(c, text="模型：", font=(FONT_FAMILY, FONT_SIZE)).grid(row=r, column=0, sticky='w')
+        LW = 5
+        ttk.Label(c, text="模型：", width=LW, anchor='e', font=(FONT_FAMILY, FONT_SIZE)).grid(row=r, column=0, sticky='e', padx=(0,1))
         self.model_var = tk.StringVar(value=MODEL_DISPLAY[0])
-        mc = ttk.Combobox(c, textvariable=self.model_var, values=MODEL_DISPLAY,
-                          state='readonly', width=18)
+        mc = ttk.Combobox(c, textvariable=self.model_var, values=MODEL_DISPLAY, state='readonly', width=24)
         mc.grid(row=r, column=1, sticky='w')
         mc.bind('<<ComboboxSelected>>', lambda e: self._on_model_change())
-        ttk.Label(c, text="变换：", font=(FONT_FAMILY, FONT_SIZE)).grid(row=r, column=2, sticky='w', padx=(8, 0))
+
+        ttk.Label(c, text="变换：", width=LW, anchor='e', font=(FONT_FAMILY, FONT_SIZE)).grid(row=r, column=2, sticky='e', padx=(4,1))
         self.transform_mode = tk.StringVar(value='CDF')
-        tc = ttk.Combobox(c, textvariable=self.transform_mode, values=TRANSFORM_OPTIONS,
-                          state='readonly', width=11)
+        tc = ttk.Combobox(c, textvariable=self.transform_mode, values=TRANSFORM_OPTIONS, state='readonly', width=12)
         tc.grid(row=r, column=3, sticky='w')
         tc.bind('<<ComboboxSelected>>', lambda e: self.update_plot())
         r += 1
 
-        ttk.Label(c, text="X 轴：", font=(FONT_FAMILY, FONT_SIZE)).grid(row=r, column=0, sticky='w')
-        self.scale_x = tk.StringVar(value='线性')
-        xc = ttk.Combobox(c, textvariable=self.scale_x, values=SCALE_DISPLAY,
-                          state='readonly', width=11)
-        xc.grid(row=r, column=1, sticky='w')
-        xc.bind('<<ComboboxSelected>>', lambda e: self.update_plot())
-        ttk.Label(c, text="Y 轴：", font=(FONT_FAMILY, FONT_SIZE)).grid(row=r, column=2, sticky='w', padx=(8, 0))
-        self.scale_y = tk.StringVar(value='线性')
-        yc = ttk.Combobox(c, textvariable=self.scale_y, values=SCALE_DISPLAY,
-                          state='readonly', width=11)
-        yc.grid(row=r, column=3, sticky='w')
-        yc.bind('<<ComboboxSelected>>', lambda e: self.update_plot())
-        r += 1
-
-        # LaTeX 公式渲染区（用 matplotlib figure 渲染后嵌入）
         self.formula_fig = Figure(figsize=(4.5, 0.55), dpi=100)
         self.formula_fig.set_facecolor('#f0f0f0')
         self.formula_ax = self.formula_fig.add_subplot(111)
         self.formula_ax.axis('off')
         self.formula_canvas = FigureCanvasTkAgg(self.formula_fig, master=c)
-        self.formula_canvas.get_tk_widget().grid(row=r, column=0, columnspan=4, sticky='ew', pady=(2, 0))
+        self.formula_canvas.get_tk_widget().grid(row=r, column=0, columnspan=4, sticky='ew', pady=(1, 0))
         self._on_model_change()
+
+    def _build_plot_control_panel(self, p):
+        c = ttk.LabelFrame(p, text="绘图控制")
+        c.pack(side=tk.LEFT, fill=tk.Y, padx=4, pady=4)
+        LW = 5
+
+        r = 0
+        # X/Y 轴 + 主题 同行排列
+        ttk.Label(c, text="X 轴：", width=LW, anchor='e', font=(FONT_FAMILY, FONT_SIZE)).grid(row=r, column=0, sticky='e', padx=(0,1))
+        self.scale_x = tk.StringVar(value='线性')
+        xc = ttk.Combobox(c, textvariable=self.scale_x, values=SCALE_DISPLAY, state='readonly', width=6)
+        xc.grid(row=r, column=1, sticky='w', padx=(0,2))
+        xc.bind('<<ComboboxSelected>>', lambda e: self.update_plot())
+
+        ttk.Label(c, text="Y 轴：", width=LW, anchor='e', font=(FONT_FAMILY, FONT_SIZE)).grid(row=r, column=2, sticky='e', padx=(2,1))
+        self.scale_y = tk.StringVar(value='线性')
+        yc = ttk.Combobox(c, textvariable=self.scale_y, values=SCALE_DISPLAY, state='readonly', width=6)
+        yc.grid(row=r, column=3, sticky='w', padx=(0,2))
+        yc.bind('<<ComboboxSelected>>', lambda e: self.update_plot())
+
+        ttk.Label(c, text="主题：", width=LW, anchor='e', font=(FONT_FAMILY, FONT_SIZE)).grid(row=r, column=4, sticky='e', padx=(2,1))
+        self.theme_var = tk.StringVar(value='default')
+        themes = ['default', 'ggplot', 'seaborn-v0_8', 'bmh', 'fivethirtyeight', 'dark_background', 'classic']
+        th = ttk.Combobox(c, textvariable=self.theme_var, values=themes, state='readonly', width=12)
+        th.grid(row=r, column=5, sticky='w')
+        th.bind('<<ComboboxSelected>>', lambda e: self._apply_theme())
+        r += 1
+        ttk.Separator(c, orient=tk.HORIZONTAL).grid(row=r, column=0, columnspan=6, sticky='ew', pady=2)
+
+        r += 1
+        # X/Y 范围 + 按钮
+        ttk.Label(c, text="X 范围：", width=LW, anchor='e', font=(FONT_FAMILY, FONT_SIZE - 1)).grid(row=r, column=0, sticky='e', padx=(0,1))
+        self.xlim_min = tk.StringVar(value='')
+        ttk.Entry(c, textvariable=self.xlim_min, width=5).grid(row=r, column=1, sticky='w')
+        ttk.Label(c, text="~", font=(FONT_FAMILY, FONT_SIZE - 1)).grid(row=r, column=2)
+        self.xlim_max = tk.StringVar(value='')
+        ttk.Entry(c, textvariable=self.xlim_max, width=5).grid(row=r, column=3, sticky='w')
+        r += 1
+
+        ttk.Label(c, text="Y 范围：", width=LW, anchor='e', font=(FONT_FAMILY, FONT_SIZE - 1)).grid(row=r, column=0, sticky='e', padx=(0,1))
+        self.ylim_min = tk.StringVar(value='')
+        ttk.Entry(c, textvariable=self.ylim_min, width=5).grid(row=r, column=1, sticky='w')
+        ttk.Label(c, text="~", font=(FONT_FAMILY, FONT_SIZE - 1)).grid(row=r, column=2)
+        self.ylim_max = tk.StringVar(value='')
+        ttk.Entry(c, textvariable=self.ylim_max, width=5).grid(row=r, column=3, sticky='w')
+        r += 1
+
+        ttk.Button(c, text="取消选中", command=self._clear_selection).grid(row=r, column=0, columnspan=3, pady=2, sticky='ew', padx=(0,1))
+        ttk.Button(c, text="应用范围", command=self.update_plot).grid(row=r, column=3, columnspan=3, pady=2, sticky='ew', padx=(1,0))
+        r += 1
+
+        ttk.Button(c, text="绘制 limit 线", command=self._draw_limit_lines).grid(row=r, column=0, columnspan=6, pady=2, sticky='ew')
+
+    def _draw_limit_lines(self):
+        """重新绘图并绘制 limit 竖线"""
+        self.update_plot()
+        if not self.ax or not self._plot_meta:
+            return
+        seen = set()
+        for meta in self._plot_meta:
+            col = meta['col']
+            si = meta['selector_idx']
+            if si in seen:
+                continue
+            seen.add(si)
+            try:
+                limit = self.selectors[si].get_limit()
+            except Exception:
+                continue
+            color = meta['color']
+            self.ax.axvline(x=limit, color=color, linestyle=':', alpha=0.7, linewidth=1.5)
+            self.ax.text(limit, 0.02, f'{col}={limit:.3g}', color=color, fontsize=7,
+                         rotation=90, va='bottom', ha='right',
+                         transform=self.ax.get_xaxis_transform())
+        self.canvas.draw_idle()
+
+    def _apply_theme(self):
+        theme = self.theme_var.get()
+        try:
+            if theme == 'default':
+                plt.style.use('default')
+            else:
+                plt.style.use(theme)
+        except Exception:
+            pass
+        self.update_plot()
 
     def _build_export_panel(self, p):
         f = ttk.LabelFrame(p, text="导出")
-        f.pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=4)
-        ttk.Button(f, text="导出图片\n(PNG/PDF)", command=self.export_image).pack(fill=tk.X, pady=2)
-        ttk.Button(f, text="导出参数\n(CSV)", command=self.export_parameters).pack(fill=tk.X, pady=2)
+        f.pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=4, ipadx=6, ipady=4)
+        ttk.Button(f, text="导出图片\n(PNG/PDF)", command=self.export_image).pack(fill=tk.X, pady=3, padx=4)
+        ttk.Button(f, text="导出参数\n(CSV)", command=self.export_parameters).pack(fill=tk.X, pady=3, padx=4)
 
     def _build_middle_area(self):
         m = ttk.Frame(self)
@@ -307,16 +564,13 @@ class App(tk.Toplevel):
                 foreground='red')
         else:
             self.mode_label.config(
-                text="● 普通：单击/右键框选高亮，双击显示数据",
+                text="● 普通：单击选点 / 右键框选 / 双击显示数据",
                 foreground='#555555')
 
-    def _on_box_select(self, eclick, erelease):
-        x1, y1 = eclick.xdata, eclick.ydata
-        x2, y2 = erelease.xdata, erelease.ydata
-        if None in (x1, y1, x2, y2):
-            return
-        xmin, xmax = sorted([x1, x2])
-        ymin, ymax = sorted([y1, y2])
+    def _on_box_select_virtual(self, x0, y0, x1, y1):
+        """手动框选回调，x0,y0,x1,y1 为数据坐标"""
+        xmin, xmax = sorted([x0, x1])
+        ymin, ymax = sorted([y0, y1])
         sel = []
         for m in self._plot_meta:
             if self._active_selector_idx is not None and m['selector_idx'] != self._active_selector_idx:
@@ -406,9 +660,6 @@ class App(tk.Toplevel):
             return
         self.current_model = MODEL_KEY_MAP.get(self.model_var.get(), 'Weibull')
         model = self.models[self.current_model]
-        if self._rect_selector is not None:
-            self._rect_selector.set_active(False)
-            self._rect_selector = None
         self._active_selector_idx = None
         if self.figure:
             plt.close(self.figure)
@@ -433,13 +684,24 @@ class App(tk.Toplevel):
                     self._fit_plot(ax, model, sub.values, sub.index.values, c, None, si, gcolors['All'])
         tr = self.transform_mode.get()
         yt = 'CDF' if tr == 'CDF' else 'ln(-ln(1-CDF))'
-        ax.set_xlabel('X 值', fontsize=12)
+        ax.set_xlabel('')
         ax.set_ylabel(yt, fontsize=12)
-        ax.set_title(f'{self.current_model} 分布拟合', fontsize=14, fontweight='bold')
+        ax.set_title(f'{self.current_model} Distribution Fit', fontsize=14, fontweight='bold')
         ax.set_xscale(SCALE_MAP.get(self.scale_x.get(), self.scale_x.get()))
         ax.set_yscale(SCALE_MAP.get(self.scale_y.get(), self.scale_y.get()))
-        ax.xaxis.set_major_formatter(_SCIFMT)
-        ax.yaxis.set_major_formatter(_SCIFMT)
+        # 科学计数法：跨量级时每个 tick 独立显示 a.aa×10ⁿ
+        from matplotlib.ticker import FuncFormatter
+        def _sci_fmt(v, _):
+            if v == 0:
+                return '0'
+            exp = int(np.floor(np.log10(abs(v))))
+            mant = v / 10**exp
+            if abs(exp) <= 1:
+                return f'{v:#.4g}'
+            return f'{mant:.2f}e{exp:+d}'
+        ax.xaxis.set_major_formatter(FuncFormatter(_sci_fmt))
+        ax.yaxis.set_major_formatter(FuncFormatter(_sci_fmt))
+        self._apply_axis_limits(ax)
         # 构建分层图例：列名(带marker) → 分组(R²)
         from matplotlib.lines import Line2D
         leg = []
@@ -455,13 +717,13 @@ class App(tk.Toplevel):
             if c not in col_done:
                 col_done.add(c)
                 leg.append(Line2D([0], [0], marker=mk, color='#444444', linestyle=ls,
-                                  label=f'▸ {c}', markersize=8, linewidth=2))
+                                  label=f'— {c} —', markersize=8, linewidth=2))
             key = (c, g if g else 'All')
             r2 = self.fit_results.get(key, (None, None, 0, None, None))[2]
             gtxt = g if g else ''
             leg.append(Line2D([0], [0], marker=mk, color=m['color'], linestyle=ls,
                               label=f'  {gtxt}  R²={r2:.4f}', markersize=6, linewidth=2))
-        ax.legend(handles=leg, loc='best', fontsize=9, framealpha=0.9)
+        ax.legend(handles=leg, loc='best', fontsize=9, framealpha=0.9, handlelength=4.0)
         ax.grid(True, alpha=0.3)
         self.figure.tight_layout()
         self._embed_canvas()
@@ -485,14 +747,25 @@ class App(tk.Toplevel):
         ls = linestyles[si % len(linestyles)]
         art = ax.scatter(xs, y, alpha=0.6, s=40, color=color,
                          edgecolor='none', picker=5, marker=mk)
-        xf = np.linspace(xs.min(), xs.max() * 1.1, 200)
+        # 拟合曲线延伸覆盖 limit
+        limit = self.selectors[si].get_limit()
+        xf_min = min(xs.min() * 0.95, limit * 0.9) if limit > 0 else xs.min() * 0.95
+        xf_max = max(xs.max() * 1.05, limit * 1.1) if limit > 0 else xs.max() * 1.05
+        xf = np.linspace(xf_min, xf_max, 200)
         yc = model.cdf(xf, popt)
         if tr != 'CDF':
             yc = np.log(np.maximum(-np.log(np.maximum(1 - yc, 1e-10)), 1e-10))
         ax.plot(xf, yc, color=color, linestyle=ls, alpha=0.8, linewidth=2)
         key = (col, group if group else 'All')
         self.fit_results[key] = (model.name, popt, r2, xs, cdf)
-        self.stats_cache[key] = self._stats(ss)
+        stats = self._stats(ss)
+        # 计算 limit 处模型值
+        try:
+            limit = self.selectors[si].get_limit()
+            stats['F_at_limit'] = model.cdf(limit, popt)
+        except Exception:
+            pass
+        self.stats_cache[key] = stats
         self._plot_meta.append({'artist': art, 'col': col, 'group': group,
                                 'selector_idx': si, 'df_indices': di,
                                 'xs': xs, 'ys': y, 'samples': ss, 'color': color})
@@ -504,6 +777,20 @@ class App(tk.Toplevel):
                 'std': np.std(s, ddof=1) if len(s) > 1 else 0.0,
                 'median': np.median(s), 'p5': np.percentile(s, 5),
                 'p95': np.percentile(s, 95), 'min': np.min(s), 'max': np.max(s)}
+
+    def _apply_axis_limits(self, ax):
+        """应用用户设定的 X/Y 轴范围"""
+        try:
+            if self.xlim_min.get():
+                ax.set_xlim(left=float(self.xlim_min.get()))
+            if self.xlim_max.get():
+                ax.set_xlim(right=float(self.xlim_max.get()))
+            if self.ylim_min.get():
+                ax.set_ylim(bottom=float(self.ylim_min.get()))
+            if self.ylim_max.get():
+                ax.set_ylim(top=float(self.ylim_max.get()))
+        except ValueError:
+            pass
 
     def _embed_canvas(self):
         if self.canvas:
@@ -530,14 +817,44 @@ class App(tk.Toplevel):
             return
         self._clear_selection()
         self._update_mode_label()
-        if self._rect_selector is not None:
-            self._rect_selector.set_active(False)
-            self._rect_selector = None
-        props = dict(facecolor='blue', edgecolor='blue', alpha=0.2, fill=True)
-        self._rect_selector = RectangleSelector(
-            self.ax, self._on_box_select, useblit=True, button=[3],
-            minspanx=0.5, minspany=0.5, spancoords='data',
-            interactive=False, props=props)
+
+        # 手动右键框选（比 RectangleSelector 更可靠）
+        self._box_start = None
+        self._box_patch = None
+
+        def on_press(event):
+            if event.button == 3 and event.inaxes and event.xdata and event.ydata:
+                self._box_start = (event.xdata, event.ydata)
+
+        def on_motion(event):
+            if self._box_start and event.inaxes and event.xdata and event.ydata:
+                if self._box_patch:
+                    self._box_patch.remove()
+                x0, y0 = self._box_start
+                import matplotlib.patches as mpatches
+                self._box_patch = mpatches.Rectangle(
+                    (min(x0, event.xdata), min(y0, event.ydata)),
+                    abs(event.xdata - x0), abs(event.ydata - y0),
+                    fill=True, facecolor='blue', edgecolor='blue', alpha=0.2)
+                self.ax.add_patch(self._box_patch)
+                self.canvas.draw_idle()
+
+        def on_release(event):
+            if self._box_start:
+                if self._box_patch:
+                    self._box_patch.remove()
+                    self._box_patch = None
+                x0, y0 = self._box_start
+                x1, y1 = event.xdata, event.ydata
+                self._box_start = None
+                if x1 is None or y1 is None:
+                    return
+                self._on_box_select_virtual(x0, y0, x1, y1)
+                self.canvas.draw_idle()
+
+        self.canvas.mpl_connect('button_press_event', on_press)
+        self.canvas.mpl_connect('motion_notify_event', on_motion)
+        self.canvas.mpl_connect('button_release_event', on_release)
 
         def on_pick(event):
             if len(event.ind) == 0:
@@ -562,13 +879,7 @@ class App(tk.Toplevel):
                         self._highlight_selected(sel)
                     break
 
-        def on_press(event):
-            if event.inaxes is None:
-                self._clear_selection()
-                self.canvas.draw_idle()
-
         self.canvas.mpl_connect('pick_event', on_pick)
-        self.canvas.mpl_connect('button_press_event', on_press)
 
         def on_dbl(event):
             if self._selected_meta:
@@ -595,6 +906,8 @@ class App(tk.Toplevel):
             a.remove()
         self._highlight_artists.clear()
         self._selected_meta.clear()
+        if self.canvas:
+            self.canvas.draw_idle()
 
     def _show_popup(self, sm):
         """Treeview 弹窗：按列→分组折叠显示全部数据"""
@@ -605,26 +918,31 @@ class App(tk.Toplevel):
         tv = ttk.Treeview(top, columns=('PART_ID', '值'), show='tree headings')
         tv.heading('PART_ID', text='PART_ID')
         tv.heading('值', text='值')
-        tv.column('#0', width=60, anchor='w', stretch=False)
         tv.column('PART_ID', width=150, anchor='w')
         tv.column('值', width=150, anchor='e')
 
-        # 按列→分组组织
+        # 按列→分组组织，同时收集最大文本宽度
+        max_len = 0
         by_col = {}
         for s in sm:
             by_col.setdefault(s['col'], []).append(s)
+            max_len = max(max_len, len(s['col']))
         for col, items in sorted(by_col.items()):
             cn = tv.insert('', tk.END, text=col, values=('', ''), open=True)
             by_grp = {}
             for s in items:
                 r = self.data.iloc[s['df_idx']]
                 g = r.get(self.group_column, '-') if self.group_column else '-'
+                max_len = max(max_len, len(str(g)))
                 pid = str(r.get('PART_ID', r.get('part_id', str(s['df_idx']))))
                 by_grp.setdefault(g, []).append((pid, s['x_raw']))
             for g, pts in sorted(by_grp.items()):
                 gn = tv.insert(cn, tk.END, text=g, values=('', ''), open=True)
                 for pid, val in pts:
                     tv.insert(gn, tk.END, text='', values=(pid, f'{val:.6g}'))
+
+        # 自适应列宽：每字符约 10px + 缩进余量
+        tv.column('#0', width=max(80, max_len * 10 + 40), anchor='w', stretch=False)
 
         sy = ttk.Scrollbar(top, orient=tk.VERTICAL, command=tv.yview)
         sx = ttk.Scrollbar(top, orient=tk.HORIZONTAL, command=tv.xview)
@@ -660,7 +978,8 @@ class App(tk.Toplevel):
                 st = self.stats_cache.get((col, grp), {})
                 for lbl, k in [('样本数', 'count'), ('均值', 'mean'), ('标准差', 'std'),
                                ('中位数', 'median'), ('5%分位数', 'p5'), ('95%分位数', 'p95'),
-                               ('最小值', 'min'), ('最大值', 'max')]:
+                               ('最小值', 'min'), ('最大值', 'max'),
+                               ('limit处F值', 'F_at_limit')]:
                     v = st.get(k)
                     if v is not None:
                         t.insert(gn, tk.END, text=lbl,

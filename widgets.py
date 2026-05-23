@@ -30,8 +30,8 @@ class SeriesSelector(ttk.Frame):
         self.selection_change_callback = selection_change_callback
         self.var = tk.StringVar()
 
-        # 单行：列选择下拉 + 移除 + 手动去除 + 自动去除 + 恢复
-        ttk.Label(self, text=f"列 {idx + 1}：",
+        # 单行：测试项选择下拉 + 移除 + 手动去除 + 自动去除 + 恢复
+        ttk.Label(self, text=f"测试项 {idx + 1}：",
                   font=(FONT_FAMILY, FONT_SIZE)).pack(side=tk.LEFT, padx=2)
         self.combo = ttk.Combobox(self, values=columns,
                                   textvariable=self.var, state='readonly', width=14)
@@ -41,13 +41,18 @@ class SeriesSelector(ttk.Frame):
         self.combo.bind('<<ComboboxSelected>>', self._on_selection_change)
 
         ttk.Button(self, text="移除", width=4,
-                   command=self._on_remove).pack(side=tk.LEFT, padx=1)
+                   command=self._on_remove).pack(side=tk.LEFT, padx=2)
         ttk.Button(self, text="手动去除", width=7,
-                   command=self._on_manual_remove).pack(side=tk.LEFT, padx=1)
+                   command=self._on_manual_remove).pack(side=tk.LEFT, padx=2)
         ttk.Button(self, text="自动去除", width=7,
-                   command=self._on_auto_remove).pack(side=tk.LEFT, padx=1)
+                   command=self._on_auto_remove).pack(side=tk.LEFT, padx=2)
         ttk.Button(self, text="恢复", width=5,
-                   command=self._on_restore).pack(side=tk.LEFT, padx=1)
+                   command=self._on_restore).pack(side=tk.LEFT, padx=2)
+
+        ttk.Label(self, text=" limit:", font=(FONT_FAMILY, FONT_SIZE - 1)).pack(side=tk.LEFT, padx=(4, 0))
+        self.limit_var = tk.StringVar(value="0.1")
+        ttk.Entry(self, textvariable=self.limit_var, width=5,
+                  font=(FONT_FAMILY, FONT_SIZE - 1)).pack(side=tk.LEFT)
 
     def _on_remove(self):
         if self.remove_callback:
@@ -71,3 +76,9 @@ class SeriesSelector(ttk.Frame):
 
     def get_selection(self):
         return self.var.get()
+
+    def get_limit(self):
+        try:
+            return float(self.limit_var.get())
+        except ValueError:
+            return 0.1

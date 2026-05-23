@@ -28,13 +28,19 @@ TRANSFORM_OPTIONS = ['CDF', 'ln(-ln(1-CDF))']
 
 # ============ 模型注册 ============
 # 内部键列表（与 models/ 下各模块的 key 一致）
-MODEL_KEYS = ['Weibull', 'Lognormal', 'Normal']
+MODEL_KEYS = ['Weibull', 'Weibull3P', 'Exponential', 'Lognormal', 'Normal',
+              'Gamma', 'LogLogistic', 'Gumbel', 'BirnbaumSaunders']
 
-# 显示名列表（与 MODEL_KEYS 一一对应）
 MODEL_DISPLAY = [
-    'Weibull（威布尔）',
+    'Weibull-2P（威布尔两参数）',
+    'Weibull-3P（威布尔三参数）',
+    'Exponential（指数分布）',
     'Lognormal（对数正态）',
     'Normal（正态）',
+    'Gamma（伽马）',
+    'Log-Logistic（对数逻辑）',
+    'Gumbel（极值I型）',
+    'Birnbaum-Saunders（疲劳寿命）',
 ]
 
 # 双向映射

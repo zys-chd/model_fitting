@@ -5,19 +5,36 @@
 try:
     from .base import DistributionModel
     from .weibull import WeibullModel
+    from .weibull3p import Weibull3PModel
+    from .exponential import ExponentialModel
     from .lognormal import LognormalModel
     from .normal import NormalModel
+    from .gamma import GammaModel
+    from .loglogistic import LogLogisticModel
+    from .gumbel import GumbelModel
+    from .birnbaum_saunders import BirnbaumSaundersModel
 except ImportError:
     from base import DistributionModel
     from weibull import WeibullModel
+    from weibull3p import Weibull3PModel
+    from exponential import ExponentialModel
     from lognormal import LognormalModel
     from normal import NormalModel
+    from gamma import GammaModel
+    from loglogistic import LogLogisticModel
+    from gumbel import GumbelModel
+    from birnbaum_saunders import BirnbaumSaundersModel
 
-# 模型实例注册表（内部键 -> 模型实例）
 MODEL_INSTANCES = {
     WeibullModel.KEY: WeibullModel(),
+    Weibull3PModel.KEY: Weibull3PModel(),
+    ExponentialModel.KEY: ExponentialModel(),
     LognormalModel.KEY: LognormalModel(),
     NormalModel.KEY: NormalModel(),
+    GammaModel.KEY: GammaModel(),
+    LogLogisticModel.KEY: LogLogisticModel(),
+    GumbelModel.KEY: GumbelModel(),
+    BirnbaumSaundersModel.KEY: BirnbaumSaundersModel(),
 }
 
 

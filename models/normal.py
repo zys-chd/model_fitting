@@ -56,3 +56,10 @@ class NormalModel(DistributionModel):
 
     def get_param_names(self):
         return ["μ (mean)", "σ (std)"]
+
+    def get_description(self):
+        return (
+            "正态分布描述对称的失效模式。\n\n"
+            "参数：μ (均值), σ (标准差)\n\n"
+            "适用：机械磨损（均值附近集中失效）、测量误差。"
+        )

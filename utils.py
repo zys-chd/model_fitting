@@ -61,10 +61,12 @@ def generate_test_data(path: str = None) -> pd.DataFrame:
         'group': [groups[i % len(groups)] for i in range(rows)],
     }
 
-    for col_idx, col_name in enumerate(['IDSS1', 'IDSS2', 'IGSS1', 'IGSS2']):
+    for col_idx, col_name in enumerate(['IDSS1', 'IDSS2', 'IGSS1', 'IGSS2', "VTH1", "VTH2", "RDSON1", "RDSON2", "BVDSS1", "BVDSS2"]):
         k = 0.8 + 0.3 * col_idx
         lam = 50 + 10 * col_idx
         samples = rng.weibull(k, size=rows) * lam
+        # # 根据数值将原数据限制在 0.5-100 范围内
+        # samples = np.clip(samples, 0.5, 100)        
         # 注入少量异常值
         samples[rng.choice(rows, size=5, replace=False)] *= rng.uniform(1.5, 3.0, size=5)
         data[col_name] = samples

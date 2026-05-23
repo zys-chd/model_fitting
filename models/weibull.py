@@ -56,3 +56,14 @@ class WeibullModel(DistributionModel):
 
     def get_param_names(self):
         return ["β (shape)", "η (scale)"]
+
+    def get_description(self):
+        return (
+            "Weibull-2P 是可靠性工程中最通用的寿命分布模型。\n\n"
+            "参数：β (形状参数) — 控制失效率趋势\n"
+            "　　　β<1 递减失效率（早期失效）\n"
+            "　　　β=1 恒定失效率（等同指数分布）\n"
+            "　　　β>1 递增失效率（磨损失效）\n"
+            "　　　η (尺度参数) — 特征寿命，63.2% 失效点\n\n"
+            "适用：机械零件寿命、电子元器件可靠性、材料强度分析。"
+        )

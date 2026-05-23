@@ -30,6 +30,10 @@ class DistributionModel:
         """返回参数名列表"""
         raise NotImplementedError
 
+    def get_description(self) -> str:
+        """返回模型介绍文本（可选重写）"""
+        return ""
+
     @staticmethod
     def compute_r_squared(y_true: np.ndarray, y_pred: np.ndarray) -> float:
         """计算 R² 决定系数"""

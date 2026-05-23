@@ -3,3 +3,6 @@ __pycache__/
 *.png
 *.csv
 .DS_Store
+*.pyc
+__pycache__/
+*.pyi
