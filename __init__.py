@@ -14,6 +14,6 @@ model_fitting — 分布拟合工具包
     from model_fitting import App
     app = App(dataframe=my_dataframe)
 """
-from .app import App
+from .model_fitting_app import Model_Fitting_App
 
-__all__ = ['App']
+__all__ = ['Model_Fitting_App']

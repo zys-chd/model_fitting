@@ -5,10 +5,11 @@ build/
 log/
 *.pyc
 *.png
+!model_fitting.png
 *.csv
 *.log
 .DS_Store
 *.pyi
 *.spec
+~$*
 tempCodeRunnerFile.py
-

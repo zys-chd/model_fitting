@@ -140,7 +140,7 @@ def _safe_lnln(cdf_vals):
     return np.nan_to_num(result, nan=-100, posinf=100, neginf=-100)
 
 
-class App(tk.Toplevel):
+class Model_Fitting_App(tk.Toplevel):
     """分布拟合工具主窗口"""
 
     def __init__(self, parent=None, dataframe=None):
@@ -293,8 +293,8 @@ class App(tk.Toplevel):
 
         # ===== 文件 =====
         fm = tk.Menu(menubar, tearoff=0)
-        fm.add_command(label="加载 CSV", command=self.load_csv)
-        fm.add_command(label="加载 CSV（新窗口）", command=self._open_new_window)
+        fm.add_command(label="读取数据", command=self._load_data)
+        fm.add_command(label="读取数据（新窗口）", command=self._load_data_new_window)
         fm.add_command(label="生成测试数据", command=self.generate_and_load)
         fm.add_separator()
         fm.add_command(label="导出模板", command=self._export_template)
@@ -399,21 +399,96 @@ class App(tk.Toplevel):
 
         self.config(menu=menubar)
 
-    def _open_new_window(self):
-        """在新窗口中打开另一个分布拟合工具实例"""
-        self._log.info("打开新窗口加载 CSV")
-        path = filedialog.askopenfilename(
-            filetypes=[("CSV 文件", "*.csv"), ("所有文件", "*.*")], parent=self
-        )
-        if path:
-            self._log.info("新窗口加载: %s", path)
-            try:
-                df = pd.read_csv(path)
-            except Exception as e:
-                self._log.error("新窗口 CSV 加载失败: %s", e)
-                messagebox.showerror("加载错误", str(e), parent=self)
+    def _pick_excel_sheet(self, path):
+        """弹窗让用户选择 Excel 的 sheet，返回 DataFrame 或 None"""
+        try:
+            xl = pd.ExcelFile(path)
+        except Exception as e:
+            messagebox.showerror("读取失败", f"无法打开 Excel 文件：\n{e}", parent=self)
+            return None
+        sheets = xl.sheet_names
+        if len(sheets) == 1:
+            return pd.read_excel(path, sheet_name=sheets[0])
+        dlg = tk.Toplevel(self)
+        dlg.title("选择工作表")
+        dlg.geometry("320x300")
+        dlg.transient(self)
+        dlg.grab_set()
+        dlg.resizable(False, False)
+        result = {"sheet": None}
+        ttk.Label(dlg, text=f"文件包含 {len(sheets)} 个工作表，请选择：",
+                  font=(FONT_FAMILY, 10)).pack(padx=15, pady=(15, 5))
+        lb = tk.Listbox(dlg, font=(FONT_FAMILY, 10), selectmode=tk.SINGLE, height=6)
+        for s in sheets:
+            lb.insert(tk.END, s)
+        lb.selection_set(0)
+        lb.pack(padx=15, pady=5, fill=tk.BOTH, expand=True)
+        def on_ok():
+            sel = lb.curselection()
+            if sel:
+                result["sheet"] = sheets[sel[0]]
+            dlg.destroy()
+        btn = ttk.Frame(dlg)
+        btn.pack(pady=(5, 10))
+        ttk.Button(btn, text="确认", command=on_ok).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn, text="取消", command=dlg.destroy).pack(side=tk.LEFT, padx=5)
+        self.wait_window(dlg)
+        if result["sheet"]:
+            return pd.read_excel(path, sheet_name=result["sheet"])
+        return None
+
+    def _load_data(self, path=None):
+        """读取 CSV / Excel 数据"""
+        if path is None:
+            path = filedialog.askopenfilename(
+                filetypes=[("数据文件", "*.csv *.xlsx *.xls"),
+                           ("CSV 文件", "*.csv"),
+                           ("Excel 文件", "*.xlsx *.xls"),
+                           ("所有文件", "*.*")],
+                parent=self,
+            )
+            if not path:
+                self._log.debug("_load_data: 用户取消选择")
                 return
-            App(parent=self, dataframe=df)
+        self._log.info("_load_data: %s", path)
+        try:
+            ext = os.path.splitext(path)[1].lower()
+            if ext in (".xlsx", ".xls"):
+                df = self._pick_excel_sheet(path)
+                if df is None:
+                    return
+            else:
+                df = pd.read_csv(path)
+            self._apply_dataframe(df)
+        except Exception as e:
+            self._log.error("加载数据失败: %s", e)
+            messagebox.showerror("加载错误", str(e), parent=self)
+
+    def _load_data_new_window(self):
+        """在新窗口读取数据"""
+        self._log.info("打开新窗口读取数据")
+        path = filedialog.askopenfilename(
+            filetypes=[("数据文件", "*.csv *.xlsx *.xls"),
+                       ("CSV 文件", "*.csv"),
+                       ("Excel 文件", "*.xlsx *.xls"),
+                       ("所有文件", "*.*")],
+            parent=self,
+        )
+        if not path:
+            return
+        self._log.info("新窗口加载: %s", path)
+        try:
+            ext = os.path.splitext(path)[1].lower()
+            if ext in (".xlsx", ".xls"):
+                df = self._pick_excel_sheet(path)
+                if df is None:
+                    return
+            else:
+                df = pd.read_csv(path)
+            Model_Fitting_App(parent=self, dataframe=df)
+        except Exception as e:
+            self._log.error("新窗口加载失败: %s", e)
+            messagebox.showerror("加载错误", str(e), parent=self)
 
     def _show_model_info(self, display_name):
         """弹窗显示模型公式和介绍（从模型实例读取）"""
@@ -1074,19 +1149,8 @@ class App(tk.Toplevel):
         self._apply_dataframe(df)
 
     def load_csv(self, path=None):
-        if path is None:
-            path = filedialog.askopenfilename(
-                filetypes=[("CSV 文件", "*.csv"), ("所有文件", "*.*")], parent=self
-            )
-            if not path:
-                self._log.debug("load_csv: 用户取消选择")
-                return
-        self._log.info("load_csv: %s", path)
-        try:
-            self._apply_dataframe(pd.read_csv(path))
-        except Exception as e:
-            self._log.error("load_csv 失败: %s", e)
-            messagebox.showerror("加载错误", str(e), parent=self)
+        """向后兼容别名"""
+        self._load_data(path=path)
 
     def generate_and_load(self):
         self._log.info("生成测试数据并加载")
@@ -1762,7 +1826,7 @@ def launch(dataframe=None, csv_path=None):
     -------
     App
     """
-    app = App(dataframe=dataframe)
+    app = Model_Fitting_App(dataframe=dataframe)
     if csv_path and dataframe is None:
         app.after(100, lambda: app.load_csv(csv_path))
     app._tk_root.mainloop()

@@ -11,7 +11,7 @@ import os
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from app import App, launch
+from model_fitting_app import Model_Fitting_App, launch
 
 
 class TestHost(tk.Tk):
@@ -22,7 +22,7 @@ class TestHost(tk.Tk):
         self.title("分布拟合工具 — 测试启动器")
         self.geometry("520x400")
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-        self._child_windows: list[App] = []
+        self._child_windows: list[Model_Fitting_App] = []
         self._build_ui()
 
     def _build_ui(self):
@@ -57,7 +57,7 @@ class TestHost(tk.Tk):
                   font=("Microsoft YaHei", 9), name="counter").pack()
 
     def _open_as_child(self):
-        app = App(parent=self)
+        app = Model_Fitting_App(parent=self)
         self._child_windows.append(app)
         app.protocol("WM_DELETE_WINDOW", lambda a=app: self._remove_child(a))
         self._update_counter()
@@ -68,7 +68,7 @@ class TestHost(tk.Tk):
             from tkinter import messagebox
             messagebox.showwarning("缺少文件", f"找不到 {csv_path}")
             return
-        app = App(parent=self)
+        app = Model_Fitting_App(parent=self)
         self._child_windows.append(app)
         app.protocol("WM_DELETE_WINDOW", lambda a=app: self._remove_child(a))
         app.after(150, lambda: app.load_csv(csv_path))
@@ -82,7 +82,7 @@ class TestHost(tk.Tk):
             messagebox.showwarning("缺少文件", f"找不到 {csv_path}")
             return
         df = pd.read_csv(csv_path)
-        app = App(parent=self, dataframe=df)
+        app = Model_Fitting_App(parent=self, dataframe=df)
         self._child_windows.append(app)
         app.protocol("WM_DELETE_WINDOW", lambda a=app: self._remove_child(a))
         self._update_counter()
@@ -98,7 +98,7 @@ class TestHost(tk.Tk):
         df = pd.read_csv(csv_path)
         launch(dataframe=df)
 
-    def _remove_child(self, app: App):
+    def _remove_child(self, app: Model_Fitting_App):
         if app in self._child_windows:
             self._child_windows.remove(app)
         app._on_close()
