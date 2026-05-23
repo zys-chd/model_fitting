@@ -19,10 +19,25 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolb
 from matplotlib.figure import Figure
 
 # ---- 日志配置（延迟初始化，App 创建时才激活） ----
-logger = logging.getLogger("model_fitting")
+logger = logging.getLogger("model_fitting.app")
 logger.setLevel(logging.DEBUG)
 
-_instance_counter = 0
+_max_instance_id = 0
+_freed_instance_ids: set = set()
+
+
+def _acquire_instance_id():
+    """获取可用的实例 ID（优先复用已关闭窗口释放的）"""
+    global _max_instance_id
+    if _freed_instance_ids:
+        return min(_freed_instance_ids)
+    _max_instance_id += 1
+    return _max_instance_id
+
+
+def _release_instance_id(iid: int):
+    """释放实例 ID，供后续新窗口复用"""
+    _freed_instance_ids.add(iid)
 
 
 def _app_dir():
@@ -42,11 +57,8 @@ def _read_version():
         return "0.0.0"
 
 
-def _setup_logger():
-    """每个 App 实例调用一次，返回带实例 ID 的 LoggerAdapter（独立日志文件，无竞争）"""
-    global _instance_counter
-    _instance_counter += 1
-    iid = _instance_counter
+def _setup_logger(iid):
+    """为指定实例 ID 设置日志，返回 LoggerAdapter（独立日志文件，无竞争）"""
 
     # 控制台 handler：仅首次添加（所有实例共享）
     if not logger.handlers:
@@ -78,29 +90,31 @@ def _setup_logger():
 
     adapter = logging.LoggerAdapter(logger, {"instance": f"#{iid:03d}"})
     adapter.info("日志文件: %s", log_path)
-    return adapter
+    return adapter, fh
 
 
-# ---- 导入（兼容直接运行、包导入、PyInstaller 打包三种场景） ----
+# ---- 导入（优先相对导入避免联合打包时与其他项目的模块冲突） ----
 def _import_modules():
     global detect_columns, generate_test_data, default_test_path
     global FONT_FAMILY, FONT_SIZE, MAX_SERIES, COLORS
     global SCALE_DISPLAY, SCALE_MAP, TRANSFORM_OPTIONS, MODEL_DISPLAY, MODEL_KEY_MAP
     global MODEL_INSTANCES, SeriesSelector
     try:
-        from config import (FONT_FAMILY, FONT_SIZE, MAX_SERIES, COLORS,
-                            SCALE_DISPLAY, SCALE_MAP, TRANSFORM_OPTIONS,
-                            MODEL_DISPLAY, MODEL_KEY_MAP)
-        from models import MODEL_INSTANCES
-        from widgets import SeriesSelector
-        from utils import detect_columns, generate_test_data, default_test_path
-    except ImportError:
+        # 优先相对导入（精确、不与其他项目冲突）
         from .config import (FONT_FAMILY, FONT_SIZE, MAX_SERIES, COLORS,
                              SCALE_DISPLAY, SCALE_MAP, TRANSFORM_OPTIONS,
                              MODEL_DISPLAY, MODEL_KEY_MAP)
         from .models import MODEL_INSTANCES
         from .widgets import SeriesSelector
         from .utils import detect_columns, generate_test_data, default_test_path
+    except ImportError:
+        # 直接运行时回退绝对导入
+        from config import (FONT_FAMILY, FONT_SIZE, MAX_SERIES, COLORS,
+                            SCALE_DISPLAY, SCALE_MAP, TRANSFORM_OPTIONS,
+                            MODEL_DISPLAY, MODEL_KEY_MAP)
+        from models import MODEL_INSTANCES
+        from widgets import SeriesSelector
+        from utils import detect_columns, generate_test_data, default_test_path
 
 _import_modules()
 
@@ -123,7 +137,10 @@ class App(tk.Toplevel):
     """分布拟合工具主窗口"""
 
     def __init__(self, parent=None, dataframe=None):
-        self._log = _setup_logger()  # 打开 App 界面时才激活日志（每实例独立日志文件）
+        self._instance_id = _acquire_instance_id()
+        self._log, self._log_fh = _setup_logger(self._instance_id)
+        # 移除已释放 ID 的 handler（复用 ID 时旧 handler 已无效）
+        _freed_instance_ids.discard(self._instance_id)
         self._standalone = parent is None
         if self._standalone:
             self._tk_root = tk.Tk()
@@ -174,11 +191,24 @@ class App(tk.Toplevel):
         self._log.info("窗口关闭")
         # 清理 matplotlib 资源，释放 TkAgg 后端占用的事件循环和引用
         self._cleanup_matplotlib()
+        # 释放实例 ID 和日志文件 handler，供后续窗口复用
+        self._cleanup_logger()
+        _release_instance_id(self._instance_id)
         if self._standalone:
             self._tk_root.quit()
             self._tk_root.destroy()
         else:
             self.destroy()
+
+    def _cleanup_logger(self):
+        """移除该实例的日志文件 handler，释放文件句柄"""
+        if hasattr(self, "_log_fh") and self._log_fh:
+            try:
+                self._log_fh.close()
+            except Exception:
+                pass
+            logger.removeHandler(self._log_fh)
+            self._log_fh = None
 
     def _cleanup_matplotlib(self):
         """清理 matplotlib figure / canvas / toolbar，防止进程不退出"""
@@ -1049,17 +1079,18 @@ class App(tk.Toplevel):
     def update_plot(self):
         if self.data is None or not self.selectors:
             return
+        if self.group_column:
+            raw = self.data[self.group_column].dropna().unique()
+            groups = sorted(raw)
+        else:
+            groups = ["All"]
         self._log.info(
             "更新绘图: model=%s, transform=%s, xscale=%s, yscale=%s, groups=%s",
             self.model_var.get(),
             self.transform_mode.get(),
             self.scale_x.get(),
             self.scale_y.get(),
-            (
-                sorted(self.data[self.group_column].unique())
-                if self.group_column
-                else ["All"]
-            ),
+            groups,
         )
         self.current_model = MODEL_KEY_MAP.get(self.model_var.get(), "Weibull")
         model = self.models[self.current_model]
@@ -1070,11 +1101,6 @@ class App(tk.Toplevel):
             plt.close(self.figure)
         self.figure = Figure(figsize=(10, 6), dpi=100)
         self.ax = ax = self.figure.add_subplot(111)
-        groups = (
-            sorted(self.data[self.group_column].unique())
-            if self.group_column
-            else ["All"]
-        )
         gcolors = {g: COLORS[i % len(COLORS)] for i, g in enumerate(groups)}
         self._plot_meta = []
         for si, sel in enumerate(self.selectors):
@@ -1343,7 +1369,7 @@ class App(tk.Toplevel):
                         ex = {s["point_idx"] for s in same}
                         new = [s for s in sel if s["point_idx"] not in ex]
                         self._selected_meta = same + new
-                        self._redraw_hl()
+                        self._highlight_selected(self._selected_meta)
                     else:
                         self._highlight_selected(sel)
                     break
@@ -1667,6 +1693,7 @@ class App(tk.Toplevel):
                         "Median": f'{st.get("median", 0):.6g}',
                         "P5": f'{st.get("p5", 0):.6g}',
                         "P95": f'{st.get("p95", 0):.6g}',
+                        "F_at_limit": f'{v:.6g}' if isinstance((v := st.get("F_at_limit")), float) else "",
                     }
                     for pn, pv in zip(model.get_param_names(), params):
                         row[pn.replace(" ", "_")] = f"{pv:.6g}"
@@ -1677,6 +1704,26 @@ class App(tk.Toplevel):
                 messagebox.showerror("导出错误", str(e), parent=self)
 
 
-if __name__ == "__main__":
-    app = App()
+def launch(dataframe=None, csv_path=None):
+    """启动分布拟合工具
+
+    Parameters
+    ----------
+    dataframe : pd.DataFrame, optional
+        直接传入 DataFrame
+    csv_path : str, optional
+        CSV 文件路径
+
+    Returns
+    -------
+    App
+    """
+    app = App(dataframe=dataframe)
+    if csv_path and dataframe is None:
+        app.after(100, lambda: app.load_csv(csv_path))
     app._tk_root.mainloop()
+    return app
+
+
+if __name__ == "__main__":
+    launch()

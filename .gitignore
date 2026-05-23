@@ -10,4 +10,5 @@ log/
 .DS_Store
 *.pyi
 *.spec
+tempCodeRunnerFile.py
 
