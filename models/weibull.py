@@ -51,7 +51,8 @@ class WeibullModel(DistributionModel):
         return self._cdf_func(x, beta, eta)
 
     def get_formula(self):
-        return "F(x) = 1 - exp(-(x/η)^β)"
+        # return "F(x) = 1 - exp(-(x/η)^β)"
+        return r"F(x) = 1 - \exp\left(-\left(\frac{x}{\eta}\right)^{\beta}\right)"
 
     def get_param_names(self):
         return ["β (shape)", "η (scale)"]

@@ -36,7 +36,6 @@ _SCIFMT = ScalarFormatter(useMathText=True)
 _SCIFMT.set_scientific(True)
 _SCIFMT.set_powerlimits((-2, 4))
 
-
 class App(tk.Toplevel):
     """分布拟合工具主窗口"""
 
@@ -155,7 +154,7 @@ class App(tk.Toplevel):
         r += 1
 
         # LaTeX 公式渲染区（用 matplotlib figure 渲染后嵌入）
-        self.formula_fig = Figure(figsize=(3.2, 0.35), dpi=100)
+        self.formula_fig = Figure(figsize=(4.5, 0.55), dpi=100)
         self.formula_fig.set_facecolor('#f0f0f0')
         self.formula_ax = self.formula_fig.add_subplot(111)
         self.formula_ax.axis('off')
@@ -235,8 +234,7 @@ class App(tk.Toplevel):
         self.formula_ax.clear()
         self.formula_ax.axis('off')
         self.formula_ax.text(0.5, 0.5, f'${formula}$', transform=self.formula_ax.transAxes,
-                             fontsize=11, ha='center', va='center',
-                             fontfamily='DejaVu Sans')
+                             fontsize=14, ha='center', va='center')
         self.formula_fig.canvas.draw_idle()
         self.update_plot()
 
