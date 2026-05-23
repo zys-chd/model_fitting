@@ -13,3 +13,5 @@ log/
 *.spec
 ~$*
 tempCodeRunnerFile.py
+/test.py
+/test.xlsx
