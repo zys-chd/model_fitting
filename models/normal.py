@@ -52,7 +52,7 @@ class NormalModel(DistributionModel):
         return self._cdf_func(x, *params)
 
     def get_formula(self):
-        return r"F(x) = \frac{1}{2}\left[1 + \mathrm{erf}\left(\frac{x - \mu}{\sigma \sqrt{2}}\right)\right]"
+        return r"F(x) = \Phi\left(\frac{x - \mu}{\sigma}\right)"
 
     def get_param_names(self):
         return ["μ (mean)", "σ (std)"]

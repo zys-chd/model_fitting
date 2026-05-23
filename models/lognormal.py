@@ -54,7 +54,7 @@ class LognormalModel(DistributionModel):
         return self._cdf_func(x, *params)
 
     def get_formula(self):
-        return r"F(x) = \frac{1}{2}\left[1 + \mathrm{erf}\left(\frac{\ln(x) - \mu}{\sigma \sqrt{2}}\right)\right]"
+        return r"F(x) = \Phi\left(\frac{\ln(x) - \mu}{\sigma}\right)"
 
     def get_param_names(self):
         return ["σ (shape)", "μ (location)", "scale"]

@@ -139,18 +139,24 @@ class App(tk.Toplevel):
         mc.bind('<<ComboboxSelected>>', lambda e: self._on_model_change())
         ttk.Label(c, text="变换：", font=(FONT_FAMILY, FONT_SIZE)).grid(row=r, column=2, sticky='w', padx=(8, 0))
         self.transform_mode = tk.StringVar(value='CDF')
-        ttk.Combobox(c, textvariable=self.transform_mode, values=TRANSFORM_OPTIONS,
-                     state='readonly', width=11).grid(row=r, column=3, sticky='w')
+        tc = ttk.Combobox(c, textvariable=self.transform_mode, values=TRANSFORM_OPTIONS,
+                          state='readonly', width=11)
+        tc.grid(row=r, column=3, sticky='w')
+        tc.bind('<<ComboboxSelected>>', lambda e: self.update_plot())
         r += 1
 
         ttk.Label(c, text="X 轴：", font=(FONT_FAMILY, FONT_SIZE)).grid(row=r, column=0, sticky='w')
         self.scale_x = tk.StringVar(value='线性')
-        ttk.Combobox(c, textvariable=self.scale_x, values=SCALE_DISPLAY,
-                     state='readonly', width=11).grid(row=r, column=1, sticky='w')
+        xc = ttk.Combobox(c, textvariable=self.scale_x, values=SCALE_DISPLAY,
+                          state='readonly', width=11)
+        xc.grid(row=r, column=1, sticky='w')
+        xc.bind('<<ComboboxSelected>>', lambda e: self.update_plot())
         ttk.Label(c, text="Y 轴：", font=(FONT_FAMILY, FONT_SIZE)).grid(row=r, column=2, sticky='w', padx=(8, 0))
         self.scale_y = tk.StringVar(value='线性')
-        ttk.Combobox(c, textvariable=self.scale_y, values=SCALE_DISPLAY,
-                     state='readonly', width=11).grid(row=r, column=3, sticky='w')
+        yc = ttk.Combobox(c, textvariable=self.scale_y, values=SCALE_DISPLAY,
+                          state='readonly', width=11)
+        yc.grid(row=r, column=3, sticky='w')
+        yc.bind('<<ComboboxSelected>>', lambda e: self.update_plot())
         r += 1
 
         # LaTeX 公式渲染区（用 matplotlib figure 渲染后嵌入）
@@ -434,7 +440,28 @@ class App(tk.Toplevel):
         ax.set_yscale(SCALE_MAP.get(self.scale_y.get(), self.scale_y.get()))
         ax.xaxis.set_major_formatter(_SCIFMT)
         ax.yaxis.set_major_formatter(_SCIFMT)
-        ax.legend(loc='best', fontsize=9, framealpha=0.9)
+        # 构建分层图例：列名(带marker) → 分组(R²)
+        from matplotlib.lines import Line2D
+        leg = []
+        mklist = ['o', 's', '^', 'D', 'v', 'p', '*', 'X']
+        lslist = ['-', '--', '-.', ':']
+        col_done = set()
+        for m in self._plot_meta:
+            c = m['col']
+            g = m.get('group')
+            si = m['selector_idx']
+            mk = mklist[si % len(mklist)]
+            ls = lslist[si % len(lslist)]
+            if c not in col_done:
+                col_done.add(c)
+                leg.append(Line2D([0], [0], marker=mk, color='#444444', linestyle=ls,
+                                  label=f'▸ {c}', markersize=8, linewidth=2))
+            key = (c, g if g else 'All')
+            r2 = self.fit_results.get(key, (None, None, 0, None, None))[2]
+            gtxt = g if g else ''
+            leg.append(Line2D([0], [0], marker=mk, color=m['color'], linestyle=ls,
+                              label=f'  {gtxt}  R²={r2:.4f}', markersize=6, linewidth=2))
+        ax.legend(handles=leg, loc='best', fontsize=9, framealpha=0.9)
         ax.grid(True, alpha=0.3)
         self.figure.tight_layout()
         self._embed_canvas()
@@ -456,8 +483,7 @@ class App(tk.Toplevel):
         linestyles = ['-', '--', '-.', ':']
         mk = markers[si % len(markers)]
         ls = linestyles[si % len(linestyles)]
-        lbl = f'{col}' + (f' - {group}' if group else '') + f' (R²={r2:.4f})'
-        art = ax.scatter(xs, y, alpha=0.6, s=40, color=color, label=lbl,
+        art = ax.scatter(xs, y, alpha=0.6, s=40, color=color,
                          edgecolor='none', picker=5, marker=mk)
         xf = np.linspace(xs.min(), xs.max() * 1.1, 200)
         yc = model.cdf(xf, popt)
@@ -576,21 +602,19 @@ class App(tk.Toplevel):
         top.title("数据点详情")
         top.geometry("650x500")
 
-        tv = ttk.Treeview(top, columns=('PART_ID', 'group', '值'), show='tree headings')
+        tv = ttk.Treeview(top, columns=('PART_ID', '值'), show='tree headings')
         tv.heading('PART_ID', text='PART_ID')
-        tv.heading('group', text='分组')
         tv.heading('值', text='值')
-        tv.column('#0', width=40, anchor='w', stretch=False)
-        tv.column('PART_ID', width=120, anchor='w')
-        tv.column('group', width=80, anchor='w')
-        tv.column('值', width=120, anchor='e')
+        tv.column('#0', width=60, anchor='w', stretch=False)
+        tv.column('PART_ID', width=150, anchor='w')
+        tv.column('值', width=150, anchor='e')
 
         # 按列→分组组织
         by_col = {}
         for s in sm:
             by_col.setdefault(s['col'], []).append(s)
         for col, items in sorted(by_col.items()):
-            cn = tv.insert('', tk.END, text=col, values=('', '', ''), open=True)
+            cn = tv.insert('', tk.END, text=col, values=('', ''), open=True)
             by_grp = {}
             for s in items:
                 r = self.data.iloc[s['df_idx']]
@@ -598,9 +622,9 @@ class App(tk.Toplevel):
                 pid = str(r.get('PART_ID', r.get('part_id', str(s['df_idx']))))
                 by_grp.setdefault(g, []).append((pid, s['x_raw']))
             for g, pts in sorted(by_grp.items()):
-                gn = tv.insert(cn, tk.END, text=g, values=('', '', ''), open=True)
+                gn = tv.insert(cn, tk.END, text=g, values=('', ''), open=True)
                 for pid, val in pts:
-                    tv.insert(gn, tk.END, text='', values=(pid, g, f'{val:.6g}'))
+                    tv.insert(gn, tk.END, text='', values=(pid, f'{val:.6g}'))
 
         sy = ttk.Scrollbar(top, orient=tk.VERTICAL, command=tv.yview)
         sx = ttk.Scrollbar(top, orient=tk.HORIZONTAL, command=tv.xview)
