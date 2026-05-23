@@ -1,7 +1,13 @@
 __pycache__/
+.venv_pack/
+dist/
+build/
+log/
 *.pyc
 *.png
 *.csv
 *.log
 .DS_Store
 *.pyi
+*.spec
+
