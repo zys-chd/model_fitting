@@ -1,0 +1,46 @@
+"""
+分布模型抽象基类
+所有分布模型必须继承此类并实现 fit / cdf / get_formula / get_param_names
+"""
+import numpy as np
+
+
+class DistributionModel:
+    """分布模型基类"""
+
+    def __init__(self, name: str):
+        self.name = name
+        self.params = None
+        self.pcov = None
+        self.r_squared = None
+
+    def fit(self, samples):
+        """拟合模型到样本数据，返回 (params, pcov, r_squared, xs, cdf)"""
+        raise NotImplementedError
+
+    def cdf(self, x, params):
+        """计算 x 处的累积分布函数值"""
+        raise NotImplementedError
+
+    def get_formula(self):
+        """返回公式字符串"""
+        raise NotImplementedError
+
+    def get_param_names(self):
+        """返回参数名列表"""
+        raise NotImplementedError
+
+    @staticmethod
+    def compute_r_squared(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+        """计算 R² 决定系数"""
+        ss_res = np.sum((y_true - y_pred) ** 2)
+        ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
+        return float(1 - (ss_res / ss_tot)) if ss_tot != 0 else 0.0
+
+    @staticmethod
+    def prepare_cdf_data(samples) -> tuple:
+        """从样本数据计算经验 CDF 所需的 (xs_sorted, cdf_values)"""
+        xs = np.sort(np.asarray(samples))
+        n = len(xs)
+        cdf = np.arange(1, n + 1) / (n + 1)
+        return xs, cdf
