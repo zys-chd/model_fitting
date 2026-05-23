@@ -43,8 +43,8 @@ class DistributionModel:
 
     @staticmethod
     def prepare_cdf_data(samples) -> tuple:
-        """从样本数据计算经验 CDF 所需的 (xs_sorted, cdf_values)"""
+        """从样本数据计算经验 CDF（中位秩 (i-0.3)/(N+0.4)）"""
         xs = np.sort(np.asarray(samples))
         n = len(xs)
-        cdf = np.arange(1, n + 1) / (n + 1)
+        cdf = (np.arange(1, n + 1) - 0.3) / (n + 0.4)
         return xs, cdf

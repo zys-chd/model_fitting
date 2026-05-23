@@ -2,7 +2,6 @@ __pycache__/
 *.pyc
 *.png
 *.csv
+*.log
 .DS_Store
-*.pyc
-__pycache__/
 *.pyi

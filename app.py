@@ -3,6 +3,8 @@
 """
 import sys
 import os
+import logging
+import logging.handlers
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
@@ -13,8 +15,26 @@ matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.figure import Figure
-from matplotlib.widgets import RectangleSelector
-from matplotlib.ticker import ScalarFormatter
+
+# ---- 日志配置 ----
+logger = logging.getLogger('model_fitting')
+logger.setLevel(logging.DEBUG)
+if not logger.handlers:
+    fmt = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+                            datefmt='%Y-%m-%d %H:%M:%S')
+    # 控制台 handler
+    ch = logging.StreamHandler(sys.stdout)
+    ch.setLevel(logging.DEBUG)
+    ch.setFormatter(fmt)
+    logger.addHandler(ch)
+    # 文件 handler（自动轮转：单文件最大 5MB，保留 5 个历史文件）
+    log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'model_fitting.log')
+    fh = logging.handlers.RotatingFileHandler(
+        log_path, encoding='utf-8', maxBytes=5 * 1024 * 1024, backupCount=5)
+    fh.setLevel(logging.DEBUG)
+    fh.setFormatter(fmt)
+    logger.addHandler(fh)
+    logger.info('Logger 初始化完成，日志文件: %s', log_path)
 
 if __package__ is None or __package__ == '':
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -32,9 +52,19 @@ else:
     from .widgets import SeriesSelector
     from .utils import detect_columns, generate_test_data, default_test_path
 
-_SCIFMT = ScalarFormatter(useMathText=True)
-_SCIFMT.set_scientific(True)
-_SCIFMT.set_powerlimits((-2, 4))
+
+def _safe_lnln(cdf_vals):
+    """安全的 ln(-ln(1-CDF)) 变换，返回 (transformed, bad_mask)"""
+    import warnings
+    inner = 1 - np.asarray(cdf_vals)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        warnings.filterwarnings('ignore', 'divide by zero')
+        warnings.filterwarnings('ignore', 'invalid value')
+        inner = np.where(inner <= 0, 1e-300, inner)
+        result = np.log(-np.log(inner))
+        warnings.resetwarnings()
+    return np.nan_to_num(result, nan=-100, posinf=100, neginf=-100)
+
 
 class App(tk.Toplevel):
     """分布拟合工具主窗口"""
@@ -74,8 +104,10 @@ class App(tk.Toplevel):
         self._plot_meta = []
         self._selected_meta = []
         self._highlight_artists = []
-        self._rect_selector = None
+        self._box_start = None
+        self._box_patch = None
         self._active_selector_idx = None
+        self._visibility = {}  # {(col, group): True/False}
 
         self._build_ui()
         self.max_series = MAX_SERIES
@@ -84,6 +116,7 @@ class App(tk.Toplevel):
             self.after(100, lambda: self.load_dataframe(dataframe))
 
     def _on_close(self):
+        logger.info('窗口关闭')
         if self._standalone:
             self._tk_root.destroy()
         else:
@@ -92,9 +125,11 @@ class App(tk.Toplevel):
     # ==================== UI ====================
 
     def _build_ui(self):
+        logger.debug('开始构建 UI')
         self._build_menu()
         self._build_top_bar()
         self._build_middle_area()
+        logger.debug('UI 构建完成')
 
     def _build_menu(self):
         menubar = tk.Menu(self)
@@ -178,18 +213,22 @@ class App(tk.Toplevel):
 
     def _open_new_window(self):
         """在新窗口中打开另一个分布拟合工具实例"""
+        logger.info('打开新窗口加载 CSV')
         path = filedialog.askopenfilename(
             filetypes=[('CSV 文件', '*.csv'), ('所有文件', '*.*')], parent=self)
         if path:
+            logger.info('新窗口加载: %s', path)
             try:
                 df = pd.read_csv(path)
             except Exception as e:
+                logger.error('新窗口 CSV 加载失败: %s', e)
                 messagebox.showerror("加载错误", str(e), parent=self)
                 return
             App(parent=self, dataframe=df)
 
     def _show_model_info(self, display_name):
         """弹窗显示模型公式和介绍（从模型实例读取）"""
+        logger.info('显示模型信息: %s', display_name)
         key = MODEL_KEY_MAP.get(display_name)
         if not key:
             return
@@ -229,27 +268,33 @@ class App(tk.Toplevel):
         scroll.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 10), pady=(0, 10))
 
     def _menu_set_model(self, label):
+        logger.info('菜单切换模型: %s', label)
         self.model_var.set(label)
         self._on_model_change()
 
     def _menu_set_transform(self, val):
+        logger.info('菜单切换变换: %s', val)
         self.transform_mode.set(val)
         self.update_plot()
 
     def _menu_set_xscale(self, val):
+        logger.info('菜单切换 X 轴: %s', val)
         self.scale_x.set(val)
         self.update_plot()
 
     def _menu_set_yscale(self, val):
+        logger.info('菜单切换 Y 轴: %s', val)
         self.scale_y.set(val)
         self.update_plot()
 
     def _menu_set_theme(self, val):
+        logger.info('菜单切换主题: %s', val)
         self.theme_var.set(val)
         self._apply_theme()
 
     def _menu_range_dialog(self):
         """弹窗设置 X/Y 范围"""
+        logger.info('打开范围设置对话框')
         dlg = tk.Toplevel(self)
         dlg.title("设置 X/Y 范围")
         dlg.geometry("300x180")
@@ -281,6 +326,8 @@ class App(tk.Toplevel):
         ymax_e.grid(row=3, column=1, sticky='w', padx=5)
 
         def on_confirm():
+            logger.info('应用范围: x=[%s, %s], y=[%s, %s]',
+                        xmin_e.get(), xmax_e.get(), ymin_e.get(), ymax_e.get())
             self.xlim_min.set(xmin_e.get())
             self.xlim_max.set(xmax_e.get())
             self.ylim_min.set(ymin_e.get())
@@ -393,8 +440,10 @@ class App(tk.Toplevel):
 
     def _draw_limit_lines(self):
         """重新绘图并绘制 limit 竖线"""
+        logger.info('绘制 limit 线')
         self.update_plot()
         if not self.ax or not self._plot_meta:
+            logger.debug('绘制 limit 线: 无数据，跳过')
             return
         seen = set()
         for meta in self._plot_meta:
@@ -416,20 +465,15 @@ class App(tk.Toplevel):
 
     def _apply_theme(self):
         theme = self.theme_var.get()
+        logger.info('应用主题: %s', theme)
         try:
             if theme == 'default':
                 plt.style.use('default')
             else:
                 plt.style.use(theme)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning('应用主题失败: %s', e)
         self.update_plot()
-
-    def _build_export_panel(self, p):
-        f = ttk.LabelFrame(p, text="导出")
-        f.pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=4, ipadx=6, ipady=4)
-        ttk.Button(f, text="导出图片\n(PNG/PDF)", command=self.export_image).pack(fill=tk.X, pady=3, padx=4)
-        ttk.Button(f, text="导出参数\n(CSV)", command=self.export_parameters).pack(fill=tk.X, pady=3, padx=4)
 
     def _build_middle_area(self):
         m = ttk.Frame(self)
@@ -460,6 +504,7 @@ class App(tk.Toplevel):
         tc.grid_rowconfigure(0, weight=1)
         tc.grid_columnconfigure(0, weight=1)
         self.stats_tree.bind("<MouseWheel>", self._on_tree_mousewheel)
+        self.stats_tree.bind("<Button-1>", self._on_tree_click, add='+')
 
     # ==================== 选择器 ====================
 
@@ -473,8 +518,10 @@ class App(tk.Toplevel):
 
     def add_selector(self):
         if len(self.selectors) >= self.max_series:
+            logger.warning('添加列达到上限: %d', self.max_series)
             messagebox.showinfo("已达上限", f"最多支持 {self.max_series} 列", parent=self)
             return
+        logger.info('添加列: 当前 %d 列', len(self.selectors) + 1)
         s = self._make_selector()
         s.pack(fill=tk.X, pady=1)
         self.selectors.append(s)
@@ -482,17 +529,21 @@ class App(tk.Toplevel):
 
     def remove_last(self):
         if self.selectors:
+            logger.info('移除最后一列: 剩余 %d 列', len(self.selectors) - 1)
             self.selectors.pop().destroy()
             self.update_plot()
 
     def _remove_selector(self, s):
         if s in self.selectors:
+            logger.info('移除指定列: idx=%d', s.idx)
             self.selectors.remove(s)
             s.destroy()
             self.update_plot()
 
     def _on_model_change(self):
         k = MODEL_KEY_MAP.get(self.model_var.get(), 'Weibull')
+        logger.info('模型切换: %s -> %s', self.current_model, k)
+        self.current_model = k
         formula = self.models[k].get_formula()
         self.formula_ax.clear()
         self.formula_ax.axis('off')
@@ -511,6 +562,8 @@ class App(tk.Toplevel):
             messagebox.showinfo("提示", "请先选择有效的数值列", parent=self)
             return
         self._active_selector_idx = sel.idx if self._active_selector_idx != sel.idx else None
+        logger.info('手动去除模式: %s, selector_idx=%s',
+                    '进入' if self._active_selector_idx is not None else '退出', sel.idx)
         self._clear_selection()
         self._update_mode_label()
         self.canvas.draw_idle()
@@ -521,6 +574,7 @@ class App(tk.Toplevel):
         c = sel.get_selection()
         if not c or c not in self.data.columns:
             return
+        logger.info('自动去除离群点: 列=%s, model=%s', c, self.current_model)
         if self.original_data is None:
             self.original_data = self.data.copy()
         model = self.models[self.current_model]
@@ -531,7 +585,7 @@ class App(tk.Toplevel):
             try:
                 popt, _, _, _, _ = model.fit(meta['samples'])
                 yp = model.cdf(meta['samples'], popt)
-                yt = np.arange(1, len(yp) + 1) / (len(yp) + 1)
+                yt = (np.arange(1, len(yp) + 1) - 0.3) / (len(yp) + 0.4)
                 res = np.abs(yt - yp)
                 th = 3 * np.std(res)
                 mask = res > th
@@ -542,6 +596,7 @@ class App(tk.Toplevel):
             except Exception:
                 continue
         if cnt:
+            logger.info('自动去除 %d 个离群点 (列=%s)', cnt, c)
             self.fit_results.clear()
             self.stats_cache.clear()
             self.update_plot()
@@ -549,12 +604,15 @@ class App(tk.Toplevel):
 
     def _on_restore(self, sel=None):
         if self.original_data is not None:
+            logger.info('恢复原始数据')
             self.data = self.original_data.copy()
             self.original_data = None
             self.fit_results.clear()
             self.stats_cache.clear()
             self.update_plot()
             messagebox.showinfo("恢复", "数据已恢复到最初加载状态。", parent=self)
+        else:
+            logger.debug('恢复原始数据: 无需恢复（无原始数据备份）')
 
     def _update_mode_label(self):
         if self._active_selector_idx is not None:
@@ -569,6 +627,7 @@ class App(tk.Toplevel):
 
     def _on_box_select_virtual(self, x0, y0, x1, y1):
         """手动框选回调，x0,y0,x1,y1 为数据坐标"""
+        logger.debug('框选: (%.3g,%.3g)-(%.3g,%.3g)', x0, y0, x1, y1)
         xmin, xmax = sorted([x0, x1])
         ymin, ymax = sorted([y0, y1])
         sel = []
@@ -582,13 +641,18 @@ class App(tk.Toplevel):
                             'point_idx': int(i), 'x_raw': float(m['xs'][i]),
                             'y_cdf': float(m['ys'][i]), 'df_idx': m['df_indices'][i]})
         if not sel:
+            logger.debug('框选: 无匹配点')
             return
+        logger.info('框选 %d 个点', len(sel))
         if self._active_selector_idx is not None:
+            self._highlight_selected(sel)  # 先高亮
+            self.canvas.draw_idle()        # 刷新后再弹窗
             self._confirm_remove(sel)
         else:
             self._highlight_selected(sel)
 
     def _highlight_selected(self, sel):
+        logger.debug('高亮选中 %d 个点', len(sel))
         self._clear_selection()
         self._selected_meta = sel
         if sel:
@@ -609,6 +673,7 @@ class App(tk.Toplevel):
                 self.original_data = self.data.copy()
             for s in sel:
                 self.data.loc[s['df_idx'], s['col']] = np.nan
+            logger.info('手动去除 %d 个点 (列=%s)', len(sel), sel[0]['col'])
             self._active_selector_idx = None
             self.fit_results.clear()
             self.stats_cache.clear()
@@ -625,6 +690,9 @@ class App(tk.Toplevel):
         self.value_columns = info['value_columns']
         self.fit_results.clear()
         self.stats_cache.clear()
+        self._visibility.clear()
+        logger.info('数据加载: %d 行, %d 列, 数值列=%s, 分组列=%s',
+                    len(df), len(df.columns), self.value_columns, self.group_column)
         for s in self.selectors:
             s.combo['values'] = self.value_columns
             s.columns = self.value_columns
@@ -633,7 +701,9 @@ class App(tk.Toplevel):
         self.update_plot()
 
     def load_dataframe(self, df):
+        logger.info('load_dataframe: %d 行 x %d 列', len(df), len(df.columns))
         if not isinstance(df, pd.DataFrame):
+            logger.error('load_dataframe: 类型错误，期望 DataFrame')
             raise TypeError("参数必须是 pandas DataFrame")
         self._apply_dataframe(df)
 
@@ -642,13 +712,17 @@ class App(tk.Toplevel):
             path = filedialog.askopenfilename(
                 filetypes=[('CSV 文件', '*.csv'), ('所有文件', '*.*')], parent=self)
             if not path:
+                logger.debug('load_csv: 用户取消选择')
                 return
+        logger.info('load_csv: %s', path)
         try:
             self._apply_dataframe(pd.read_csv(path))
         except Exception as e:
+            logger.error('load_csv 失败: %s', e)
             messagebox.showerror("加载错误", str(e), parent=self)
 
     def generate_and_load(self):
+        logger.info('生成测试数据并加载')
         p = default_test_path()
         generate_test_data(p)
         self.load_csv(p)
@@ -658,6 +732,10 @@ class App(tk.Toplevel):
     def update_plot(self):
         if self.data is None or not self.selectors:
             return
+        logger.info('更新绘图: model=%s, transform=%s, xscale=%s, yscale=%s, groups=%s',
+                    self.model_var.get(), self.transform_mode.get(),
+                    self.scale_x.get(), self.scale_y.get(),
+                    sorted(self.data[self.group_column].unique()) if self.group_column else ['All'])
         self.current_model = MODEL_KEY_MAP.get(self.model_var.get(), 'Weibull')
         model = self.models[self.current_model]
         self._active_selector_idx = None
@@ -723,10 +801,11 @@ class App(tk.Toplevel):
             gtxt = g if g else ''
             leg.append(Line2D([0], [0], marker=mk, color=m['color'], linestyle=ls,
                               label=f'  {gtxt}  R²={r2:.4f}', markersize=6, linewidth=2))
-        ax.legend(handles=leg, loc='best', fontsize=9, framealpha=0.9, handlelength=4.0)
+        legend = ax.legend(handles=leg, loc='best', fontsize=9, framealpha=0.9, handlelength=4.0)
         ax.grid(True, alpha=0.3)
         self.figure.tight_layout()
         self._embed_canvas()
+        self._apply_visibility()
         self._setup_interaction()
         self._update_stats_tree()
 
@@ -736,10 +815,13 @@ class App(tk.Toplevel):
         ss, di = s[idx], np.asarray(df_indices)[idx]
         try:
             popt, pcov, r2, xs, cdf = model.fit(ss)
-        except Exception:
+            logger.debug('拟合 %s[%s] n=%d R²=%.5f params=%s', col, group or 'All', len(ss), r2,
+                         [f'{v:.4g}' for v in popt])
+        except Exception as e:
+            logger.warning('拟合失败 %s[%s]: %s', col, group or 'All', e)
             return
         tr = self.transform_mode.get()
-        y = cdf if tr == 'CDF' else np.log(np.maximum(-np.log(np.maximum(1 - cdf, 1e-10)), 1e-10))
+        y = cdf if tr == 'CDF' else _safe_lnln(cdf)
         # 不同列不同 marker / 不同 group 同一列用同 marker
         markers = ['o', 's', '^', 'D', 'v', 'p', '*', 'X']
         linestyles = ['-', '--', '-.', ':']
@@ -747,19 +829,23 @@ class App(tk.Toplevel):
         ls = linestyles[si % len(linestyles)]
         art = ax.scatter(xs, y, alpha=0.6, s=40, color=color,
                          edgecolor='none', picker=5, marker=mk)
-        # 拟合曲线延伸覆盖 limit
+        # 拟合曲线范围
         limit = self.selectors[si].get_limit()
-        xf_min = min(xs.min() * 0.95, limit * 0.9) if limit > 0 else xs.min() * 0.95
-        xf_max = max(xs.max() * 1.05, limit * 1.1) if limit > 0 else xs.max() * 1.05
+        if tr != 'CDF':
+            # ln(-ln(1-CDF)) 模式：以 limit 为边界参考
+            xf_min = 0.9 * min(limit, xs.min()) if limit > 0 else xs.min() * 0.98
+            xf_max = 1.1 * max(limit, xs.max()) if limit > 0 else xs.max() * 1.02
+        else:
+            xf_min = min(xs.min() * 0.95, limit * 0.9) if limit > 0 else xs.min() * 0.95
+            xf_max = max(xs.max() * 1.05, limit * 1.1) if limit > 0 else xs.max() * 1.05
         xf = np.linspace(xf_min, xf_max, 200)
         yc = model.cdf(xf, popt)
         if tr != 'CDF':
-            yc = np.log(np.maximum(-np.log(np.maximum(1 - yc, 1e-10)), 1e-10))
+            yc = _safe_lnln(yc)
         ax.plot(xf, yc, color=color, linestyle=ls, alpha=0.8, linewidth=2)
         key = (col, group if group else 'All')
         self.fit_results[key] = (model.name, popt, r2, xs, cdf)
         stats = self._stats(ss)
-        # 计算 limit 处模型值
         try:
             limit = self.selectors[si].get_limit()
             stats['F_at_limit'] = model.cdf(limit, popt)
@@ -768,7 +854,8 @@ class App(tk.Toplevel):
         self.stats_cache[key] = stats
         self._plot_meta.append({'artist': art, 'col': col, 'group': group,
                                 'selector_idx': si, 'df_indices': di,
-                                'xs': xs, 'ys': y, 'samples': ss, 'color': color})
+                                'xs': xs, 'ys': y, 'samples': ss, 'color': color,
+                                'fit_line': ax.lines[-1]})  # 直接保存拟合线引用
 
     @staticmethod
     def _stats(s):
@@ -789,8 +876,8 @@ class App(tk.Toplevel):
                 ax.set_ylim(bottom=float(self.ylim_min.get()))
             if self.ylim_max.get():
                 ax.set_ylim(top=float(self.ylim_max.get()))
-        except ValueError:
-            pass
+        except ValueError as e:
+            logger.debug('应用轴范围异常: %s', e)
 
     def _embed_canvas(self):
         if self.canvas:
@@ -807,8 +894,8 @@ class App(tk.Toplevel):
                 self.toolbar_frame.pack(fill=tk.X, padx=4, pady=2, side=tk.BOTTOM)
             self.toolbar = NavigationToolbar2Tk(self.canvas, self.toolbar_frame)
             self.toolbar.update()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug('工具栏创建失败: %s', e)
 
     # ==================== 交互 ====================
 
@@ -890,18 +977,10 @@ class App(tk.Toplevel):
 
         self.canvas.get_tk_widget().bind('<Double-Button-1>', on_dbl)
 
-    def _redraw_hl(self):
-        for a in self._highlight_artists:
-            a.remove()
-        self._highlight_artists.clear()
-        if self._selected_meta:
-            hl = self.ax.scatter([s['x_raw'] for s in self._selected_meta],
-                                 [s['y_cdf'] for s in self._selected_meta],
-                                 s=80, facecolor='none', edgecolor='red', linewidth=2, zorder=10)
-            self._highlight_artists.append(hl)
-            self.canvas.draw_idle()
-
     def _clear_selection(self):
+        if self._highlight_artists or self._selected_meta:
+            logger.debug('清除选中: %d 个高亮, %d 个选中',
+                         len(self._highlight_artists), len(self._selected_meta))
         for a in self._highlight_artists:
             a.remove()
         self._highlight_artists.clear()
@@ -911,6 +990,7 @@ class App(tk.Toplevel):
 
     def _show_popup(self, sm):
         """Treeview 弹窗：按列→分组折叠显示全部数据"""
+        logger.info('显示数据点详情弹窗: %d 个点', len(sm))
         top = tk.Toplevel(self)
         top.title("数据点详情")
         top.geometry("650x500")
@@ -966,16 +1046,27 @@ class App(tk.Toplevel):
         for (col, grp), (mn, params, r2, xs, cdf) in sorted(self.fit_results.items()):
             bc.setdefault(col, []).append((grp, mn, params, r2))
         for col, items in sorted(bc.items()):
-            cn = t.insert('', tk.END, text=col, values=('',), open=True)
+            # 列节点也显示 checkbox（聚合状态）
+            col_children = []
+            col_all_vis = True
             for grp, mn, params, r2 in items:
+                key = (col, grp)
+                vis = self._visibility.get(key, True)
+                col_children.append((key, vis))
+                if not vis:
+                    col_all_vis = False
+            col_chk = '☑' if col_all_vis else '☐'
+            cn = t.insert('', tk.END, text=f'{col_chk} {col}', values=('',), open=True)
+            for (key, vis), (grp, mn, params, r2) in zip(col_children, items):
+                chk = '☑' if vis else '☐'
                 gt = grp if grp != 'All' else '(全部)'
-                gn = t.insert(cn, tk.END, text=gt, values=('',), open=True)
+                gn = t.insert(cn, tk.END, text=f'{chk} {gt}', values=('',), open=True, tags=('group',))
                 model = self.models[mn]
                 t.insert(gn, tk.END, text='模型', values=(mn,))
                 t.insert(gn, tk.END, text='R²', values=(f'{r2:.6f}',))
                 for pn, pv in zip(model.get_param_names(), params):
                     t.insert(gn, tk.END, text=pn, values=(f'{pv:.6g}',))
-                st = self.stats_cache.get((col, grp), {})
+                st = self.stats_cache.get(key, {})
                 for lbl, k in [('样本数', 'count'), ('均值', 'mean'), ('标准差', 'std'),
                                ('中位数', 'median'), ('5%分位数', 'p5'), ('95%分位数', 'p95'),
                                ('最小值', 'min'), ('最大值', 'max'),
@@ -985,8 +1076,88 @@ class App(tk.Toplevel):
                         t.insert(gn, tk.END, text=lbl,
                                  values=(f'{v:.6g}' if isinstance(v, float) else str(v),))
 
+    def _on_tree_click(self, event):
+        """点击统计树切换显示/隐藏"""
+        item = self.stats_tree.identify_row(event.y)
+        if not item:
+            return
+        text = self.stats_tree.item(item, 'text')
+        logger.debug('统计树点击: item=%s', text)
+        parent = self.stats_tree.parent(item)
+        if parent and parent in self.stats_tree.get_children(''):
+            # 分组节点：切换单个分组
+            if '☑' not in text and '☐' not in text:
+                return
+            col = self.stats_tree.item(parent, 'text')
+            if col.startswith('☑ ') or col.startswith('☐ '):
+                col = col[2:].strip()
+            grp = text[2:].strip()
+            if grp == '(全部)':
+                grp = 'All'
+            key = (col, grp)
+            vis = not self._visibility.get(key, True)
+            self._visibility[key] = vis
+            chk = '☑' if vis else '☐'
+            gt = grp if grp != 'All' else '(全部)'
+            self.stats_tree.item(item, text=f'{chk} {gt}')
+            # 更新列节点 checkbox
+            siblings = self.stats_tree.get_children(parent)
+            all_vis = all('☑' in self.stats_tree.item(s, 'text') for s in siblings)
+            self.stats_tree.item(parent, text=f'{"☑" if all_vis else "☐"} {col}')
+        elif not parent:
+            # 列节点：切换该列所有分组
+            col = text
+            if col.startswith('☑ ') or col.startswith('☐ '):
+                col = col[2:].strip()
+            children = self.stats_tree.get_children(item)
+            if not children:
+                return
+            all_vis = all('☑' in self.stats_tree.item(c, 'text') for c in children)
+            new_vis = not all_vis
+            for c in children:
+                ct = self.stats_tree.item(c, 'text')
+                if '☑' in ct or '☐' in ct:
+                    g = ct[2:].strip()
+                    if g == '(全部)':
+                        g = 'All'
+                    self._visibility[(col, g)] = new_vis
+                    chk = '☑' if new_vis else '☐'
+                    gt = g if g != 'All' else '(全部)'
+                    self.stats_tree.item(c, text=f'{chk} {gt}')
+            # 更新列节点
+            self.stats_tree.item(item, text=f'{"☑" if new_vis else "☐"} {col}')
+        else:
+            return
+        self._apply_visibility()
+        self.canvas.draw_idle()
+
     def _on_tree_mousewheel(self, e):
         self.stats_tree.yview_scroll(-1 if e.delta > 0 else 1, "units")
+
+    def _apply_visibility(self):
+        """应用可见性设置到图上 artists 和图例"""
+        if not self.ax:
+            return
+        logger.debug('应用可见性: %d 条, %s', len(self._plot_meta),
+                     {str(k): v for k, v in self._visibility.items()})
+        for m in self._plot_meta:
+            key = (m['col'], m.get('group') if m.get('group') else 'All')
+            vis = self._visibility.get(key, True)
+            m['artist'].set_visible(vis)
+            fit_line = m.get('fit_line')
+            if fit_line:
+                fit_line.set_visible(vis)
+        # 更新图例
+        legend = self.ax.get_legend()
+        if legend:
+            for lh in legend.get_lines():
+                lbl = lh.get_label()
+                for m in self._plot_meta:
+                    g = m.get('group') if m.get('group') else ''
+                    if g and f'  {g}  R²' in lbl:
+                        key = (m['col'], m.get('group') if m.get('group') else 'All')
+                        lh.set_alpha(1.0 if self._visibility.get(key, True) else 0.3)
+                        break
 
     # ==================== 导出 ====================
 
@@ -994,9 +1165,11 @@ class App(tk.Toplevel):
         if self.figure is None:
             messagebox.showwarning("导出", "没有可导出的图表", parent=self)
             return
+        logger.info('导出图表')
         p = filedialog.asksaveasfilename(
             defaultextension=".png",
-            filetypes=[("PNG 文件", "*.png"), ("PDF 文件", "*.pdf"), ("所有文件", "*.*")],
+            filetypes=[("PNG", "*.png"), ("PDF", "*.pdf"), ("SVG", "*.svg"),
+                       ("JPG", "*.jpg"), ("EPS", "*.eps"), ("所有文件", "*.*")],
             parent=self)
         if p:
             try:
@@ -1009,6 +1182,7 @@ class App(tk.Toplevel):
         if not self.fit_results:
             messagebox.showwarning("导出", "没有可导出的拟合结果", parent=self)
             return
+        logger.info('导出参数, %d 条结果', len(self.fit_results))
         p = filedialog.asksaveasfilename(
             defaultextension=".csv",
             filetypes=[("CSV 文件", "*.csv"), ("所有文件", "*.*")],
