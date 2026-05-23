@@ -123,41 +123,45 @@ class App(tk.Toplevel):
     def _build_control_panel(self, p):
         c = ttk.LabelFrame(p, text="显示控制")
         c.pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=4)
-        LW = 5
 
-        r0 = ttk.Frame(c)
-        r0.pack(fill=tk.X, pady=2)
-        ttk.Button(r0, text="添加列", command=self.add_selector).pack(side=tk.LEFT, padx=2)
-        ttk.Button(r0, text="移除列", command=self.remove_last).pack(side=tk.LEFT, padx=2)
-        ttk.Separator(c, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=4)
+        # 统一使用 grid 布局对齐
+        r = 0
+        ttk.Button(c, text="添加列", command=self.add_selector).grid(row=r, column=0, padx=2, pady=2, sticky='w')
+        ttk.Button(c, text="移除列", command=self.remove_last).grid(row=r, column=1, padx=2, pady=2, sticky='w')
+        r += 1
+        ttk.Separator(c, orient=tk.HORIZONTAL).grid(row=r, column=0, columnspan=4, sticky='ew', pady=4)
+        r += 1
 
-        r1 = ttk.Frame(c)
-        r1.pack(fill=tk.X, pady=2)
-        ttk.Label(r1, text="模型：", width=LW, font=(FONT_FAMILY, FONT_SIZE)).pack(side=tk.LEFT)
+        ttk.Label(c, text="模型：", font=(FONT_FAMILY, FONT_SIZE)).grid(row=r, column=0, sticky='w')
         self.model_var = tk.StringVar(value=MODEL_DISPLAY[0])
-        mc = ttk.Combobox(r1, textvariable=self.model_var, values=MODEL_DISPLAY,
+        mc = ttk.Combobox(c, textvariable=self.model_var, values=MODEL_DISPLAY,
                           state='readonly', width=18)
-        mc.pack(side=tk.LEFT, padx=(0, 10))
+        mc.grid(row=r, column=1, sticky='w')
         mc.bind('<<ComboboxSelected>>', lambda e: self._on_model_change())
-        ttk.Label(r1, text="变换：", width=LW, font=(FONT_FAMILY, FONT_SIZE)).pack(side=tk.LEFT)
+        ttk.Label(c, text="变换：", font=(FONT_FAMILY, FONT_SIZE)).grid(row=r, column=2, sticky='w', padx=(8, 0))
         self.transform_mode = tk.StringVar(value='CDF')
-        ttk.Combobox(r1, textvariable=self.transform_mode, values=TRANSFORM_OPTIONS,
-                     state='readonly', width=11).pack(side=tk.LEFT)
-        self.formula_label = ttk.Label(c, text="", font=(FONT_FAMILY, FONT_SIZE - 1),
-                                       foreground='#555555')
-        self.formula_label.pack(fill=tk.X, pady=(1, 0))
-        self._on_model_change()
+        ttk.Combobox(c, textvariable=self.transform_mode, values=TRANSFORM_OPTIONS,
+                     state='readonly', width=11).grid(row=r, column=3, sticky='w')
+        r += 1
 
-        r2 = ttk.Frame(c)
-        r2.pack(fill=tk.X, pady=2)
-        ttk.Label(r2, text="X 轴：", width=LW, font=(FONT_FAMILY, FONT_SIZE)).pack(side=tk.LEFT)
+        ttk.Label(c, text="X 轴：", font=(FONT_FAMILY, FONT_SIZE)).grid(row=r, column=0, sticky='w')
         self.scale_x = tk.StringVar(value='线性')
-        ttk.Combobox(r2, textvariable=self.scale_x, values=SCALE_DISPLAY,
-                     state='readonly', width=11).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Label(r2, text="Y 轴：", width=LW, font=(FONT_FAMILY, FONT_SIZE)).pack(side=tk.LEFT)
+        ttk.Combobox(c, textvariable=self.scale_x, values=SCALE_DISPLAY,
+                     state='readonly', width=11).grid(row=r, column=1, sticky='w')
+        ttk.Label(c, text="Y 轴：", font=(FONT_FAMILY, FONT_SIZE)).grid(row=r, column=2, sticky='w', padx=(8, 0))
         self.scale_y = tk.StringVar(value='线性')
-        ttk.Combobox(r2, textvariable=self.scale_y, values=SCALE_DISPLAY,
-                     state='readonly', width=11).pack(side=tk.LEFT)
+        ttk.Combobox(c, textvariable=self.scale_y, values=SCALE_DISPLAY,
+                     state='readonly', width=11).grid(row=r, column=3, sticky='w')
+        r += 1
+
+        # LaTeX 公式渲染区（用 matplotlib figure 渲染后嵌入）
+        self.formula_fig = Figure(figsize=(3.2, 0.35), dpi=100)
+        self.formula_fig.set_facecolor('#f0f0f0')
+        self.formula_ax = self.formula_fig.add_subplot(111)
+        self.formula_ax.axis('off')
+        self.formula_canvas = FigureCanvasTkAgg(self.formula_fig, master=c)
+        self.formula_canvas.get_tk_widget().grid(row=r, column=0, columnspan=4, sticky='ew', pady=(2, 0))
+        self._on_model_change()
 
     def _build_export_panel(self, p):
         f = ttk.LabelFrame(p, text="导出")
@@ -227,7 +231,13 @@ class App(tk.Toplevel):
 
     def _on_model_change(self):
         k = MODEL_KEY_MAP.get(self.model_var.get(), 'Weibull')
-        self.formula_label.config(text=f"  {self.models[k].get_formula()}")
+        formula = self.models[k].get_formula()
+        self.formula_ax.clear()
+        self.formula_ax.axis('off')
+        self.formula_ax.text(0.5, 0.5, f'${formula}$', transform=self.formula_ax.transAxes,
+                             fontsize=11, ha='center', va='center',
+                             fontfamily='DejaVu Sans')
+        self.formula_fig.canvas.draw_idle()
         self.update_plot()
 
     # ==================== 离群点 ====================
@@ -443,14 +453,19 @@ class App(tk.Toplevel):
             return
         tr = self.transform_mode.get()
         y = cdf if tr == 'CDF' else np.log(np.maximum(-np.log(np.maximum(1 - cdf, 1e-10)), 1e-10))
-        lbl = f'{col} - {group}' if group else col
+        # 不同列不同 marker / 不同 group 同一列用同 marker
+        markers = ['o', 's', '^', 'D', 'v', 'p', '*', 'X']
+        linestyles = ['-', '--', '-.', ':']
+        mk = markers[si % len(markers)]
+        ls = linestyles[si % len(linestyles)]
+        lbl = f'{col}' + (f' - {group}' if group else '') + f' (R²={r2:.4f})'
         art = ax.scatter(xs, y, alpha=0.6, s=40, color=color, label=lbl,
-                         edgecolor='none', picker=5)
+                         edgecolor='none', picker=5, marker=mk)
         xf = np.linspace(xs.min(), xs.max() * 1.1, 200)
         yc = model.cdf(xf, popt)
         if tr != 'CDF':
             yc = np.log(np.maximum(-np.log(np.maximum(1 - yc, 1e-10)), 1e-10))
-        ax.plot(xf, yc, color=color, linestyle='-', alpha=0.8, linewidth=2)
+        ax.plot(xf, yc, color=color, linestyle=ls, alpha=0.8, linewidth=2)
         key = (col, group if group else 'All')
         self.fit_results[key] = (model.name, popt, r2, xs, cdf)
         self.stats_cache[key] = self._stats(ss)
@@ -558,24 +573,41 @@ class App(tk.Toplevel):
         self._selected_meta.clear()
 
     def _show_popup(self, sm):
-        lines = [f"原始数据详情：\n列: {sm[0]['col']}  共 {len(sm)} 个点\n", "-" * 55 + "\n"]
-        for i, s in enumerate(sm[:50]):
-            r = self.data.iloc[s['df_idx']]
-            pid = r.get('PART_ID', r.get('part_id', str(s['df_idx'])))
-            g = r.get(self.group_column, '-') if self.group_column else '-'
-            lines.append(f"  PART_ID={pid}  group={g}  值={s['x_raw']:.6g}\n")
-        if len(sm) > 50:
-            lines.append(f"  ... 还有 {len(sm) - 50} 个\n")
+        """Treeview 弹窗：按列→分组折叠显示全部数据"""
         top = tk.Toplevel(self)
         top.title("数据点详情")
-        top.geometry("550x420")
-        t = tk.Text(top, wrap=tk.NONE, font=('Consolas', 10))
-        t.insert(tk.END, "".join(lines))
-        t.config(state=tk.DISABLED)
-        sy = ttk.Scrollbar(top, orient=tk.VERTICAL, command=t.yview)
-        sx = ttk.Scrollbar(top, orient=tk.HORIZONTAL, command=t.xview)
-        t.configure(yscrollcommand=sy.set, xscrollcommand=sx.set)
-        t.grid(row=0, column=0, sticky='nsew')
+        top.geometry("650x500")
+
+        tv = ttk.Treeview(top, columns=('PART_ID', 'group', '值'), show='tree headings')
+        tv.heading('PART_ID', text='PART_ID')
+        tv.heading('group', text='分组')
+        tv.heading('值', text='值')
+        tv.column('#0', width=40, anchor='w', stretch=False)
+        tv.column('PART_ID', width=120, anchor='w')
+        tv.column('group', width=80, anchor='w')
+        tv.column('值', width=120, anchor='e')
+
+        # 按列→分组组织
+        by_col = {}
+        for s in sm:
+            by_col.setdefault(s['col'], []).append(s)
+        for col, items in sorted(by_col.items()):
+            cn = tv.insert('', tk.END, text=col, values=('', '', ''), open=True)
+            by_grp = {}
+            for s in items:
+                r = self.data.iloc[s['df_idx']]
+                g = r.get(self.group_column, '-') if self.group_column else '-'
+                pid = str(r.get('PART_ID', r.get('part_id', str(s['df_idx']))))
+                by_grp.setdefault(g, []).append((pid, s['x_raw']))
+            for g, pts in sorted(by_grp.items()):
+                gn = tv.insert(cn, tk.END, text=g, values=('', '', ''), open=True)
+                for pid, val in pts:
+                    tv.insert(gn, tk.END, text='', values=(pid, g, f'{val:.6g}'))
+
+        sy = ttk.Scrollbar(top, orient=tk.VERTICAL, command=tv.yview)
+        sx = ttk.Scrollbar(top, orient=tk.HORIZONTAL, command=tv.xview)
+        tv.configure(yscrollcommand=sy.set, xscrollcommand=sx.set)
+        tv.grid(row=0, column=0, sticky='nsew')
         sy.grid(row=0, column=1, sticky='ns')
         sx.grid(row=1, column=0, sticky='ew')
         top.grid_rowconfigure(0, weight=1)
