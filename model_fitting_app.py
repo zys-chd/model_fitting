@@ -279,7 +279,7 @@ class Model_Fitting_App(tk.Toplevel):
     def _build_ui(self):
         # Close splash only if running as compiled EXE
         if getattr(sys, 'frozen', False):
-            import pyi_splash
+            import pyi_splash # type: ignore
             pyi_splash.close()
         self._log.debug("开始构建 UI")
         self._build_menu()

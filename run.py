@@ -13,7 +13,7 @@ _parent_dir = os.path.dirname(_pkg_dir)
 if _parent_dir not in sys.path:
     sys.path.insert(0, _parent_dir)
 
-from model_fitting.model_fitting_app import launch
+from model_fitting.model_fitting_app import launch # type: ignore
 
 if __name__ == "__main__":
     csv = sys.argv[1] if len(sys.argv) > 1 else None
