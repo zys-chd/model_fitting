@@ -288,11 +288,14 @@ class Model_Fitting_App(tk.Toplevel):
         self._log.debug("UI 构建完成")
 
     def _build_menu(self):
-        menubar = tk.Menu(self)
+        menu_font = (FONT_FAMILY, FONT_SIZE + 2)
+        # 通过 option_add 设置全局菜单字体，确保一级菜单（菜单栏标题）也生效
+        # self.option_add('*Menu.font', menu_font)
+        menubar = tk.Menu(self, font=menu_font)
         self._menubar = menubar  # 保存引用供状态更新
 
         # ===== 文件 =====
-        fm = tk.Menu(menubar, tearoff=0)
+        fm = tk.Menu(menubar, tearoff=0, font=menu_font)
         fm.add_command(label="读取数据", command=self._load_data)
         fm.add_command(label="读取数据（新窗口）", command=self._load_data_new_window)
         fm.add_command(label="生成测试数据", command=self.generate_and_load)
@@ -300,10 +303,10 @@ class Model_Fitting_App(tk.Toplevel):
         fm.add_command(label="导出模板", command=self._export_template)
         fm.add_separator()
         fm.add_command(label="退出", command=self._on_close)
-        menubar.add_cascade(label="文件", menu=fm)
+        menubar.add_cascade(label="文件", menu=fm, font=menu_font)
 
         # ===== 数据 =====
-        dm = tk.Menu(menubar, tearoff=0)
+        dm = tk.Menu(menubar, tearoff=0, font=menu_font)
         dm.add_command(label="添加列", command=self.add_selector)
         dm.add_command(label="移除列", command=self.remove_last)
         dm.add_separator()
@@ -311,7 +314,7 @@ class Model_Fitting_App(tk.Toplevel):
         dm.add_command(label="导出参数", command=self.export_parameters)
         dm.add_separator()
         # 模型子菜单
-        model_sub = tk.Menu(dm, tearoff=0)
+        model_sub = tk.Menu(dm, tearoff=0, font=menu_font)
         self._model_radio = tk.StringVar(value=MODEL_DISPLAY[0])
         for md in MODEL_DISPLAY:
             model_sub.add_radiobutton(
@@ -322,7 +325,7 @@ class Model_Fitting_App(tk.Toplevel):
             )
         dm.add_cascade(label="模型选择", menu=model_sub)
         # 变换子菜单
-        trans_sub = tk.Menu(dm, tearoff=0)
+        trans_sub = tk.Menu(dm, tearoff=0, font=menu_font)
         self._trans_radio = tk.StringVar(value="CDF")
         for t in TRANSFORM_OPTIONS:
             trans_sub.add_radiobutton(
@@ -332,12 +335,12 @@ class Model_Fitting_App(tk.Toplevel):
                 command=lambda v=t: self._menu_set_transform(v),
             )
         dm.add_cascade(label="变换选择", menu=trans_sub)
-        menubar.add_cascade(label="数据", menu=dm)
+        menubar.add_cascade(label="数据", menu=dm, font=menu_font)
 
         # ===== 绘图 =====
-        pm = tk.Menu(menubar, tearoff=0)
+        pm = tk.Menu(menubar, tearoff=0, font=menu_font)
         # X轴缩放
-        x_sub = tk.Menu(pm, tearoff=0)
+        x_sub = tk.Menu(pm, tearoff=0, font=menu_font)
         self._xscale_radio = tk.StringVar(value="线性")
         for s in SCALE_DISPLAY:
             x_sub.add_radiobutton(
@@ -348,7 +351,7 @@ class Model_Fitting_App(tk.Toplevel):
             )
         pm.add_cascade(label="X 轴缩放", menu=x_sub)
         # Y轴缩放
-        y_sub = tk.Menu(pm, tearoff=0)
+        y_sub = tk.Menu(pm, tearoff=0, font=menu_font)
         self._yscale_radio = tk.StringVar(value="线性")
         for s in SCALE_DISPLAY:
             y_sub.add_radiobutton(
@@ -359,7 +362,7 @@ class Model_Fitting_App(tk.Toplevel):
             )
         pm.add_cascade(label="Y 轴缩放", menu=y_sub)
         # 主题
-        th_sub = tk.Menu(pm, tearoff=0)
+        th_sub = tk.Menu(pm, tearoff=0, font=menu_font)
         self._theme_radio = tk.StringVar(value="default")
         themes = [
             "default",
@@ -382,10 +385,10 @@ class Model_Fitting_App(tk.Toplevel):
         pm.add_command(label="X/Y 范围设置", command=self._menu_range_dialog)
         pm.add_command(label="取消选中", command=self._clear_selection)
         pm.add_command(label="绘制 limit 线", command=self._draw_limit_lines)
-        menubar.add_cascade(label="绘图", menu=pm)
+        menubar.add_cascade(label="绘图", menu=pm, font=menu_font)
 
         # ===== 关于 =====
-        am = tk.Menu(menubar, tearoff=0)
+        am = tk.Menu(menubar, tearoff=0, font=menu_font)
         am.add_command(label="分布拟合工具", command=None)
         am.add_separator()
         am.add_command(label="支持模型（点击查看详情）：")
@@ -395,7 +398,7 @@ class Model_Fitting_App(tk.Toplevel):
             )
         am.add_separator()
         am.add_command(label=f"版本: {_read_version()}", command=None)
-        menubar.add_cascade(label="关于", menu=am)
+        menubar.add_cascade(label="关于", menu=am, font=menu_font)
 
         self.config(menu=menubar)
 
@@ -631,7 +634,7 @@ class Model_Fitting_App(tk.Toplevel):
         self._build_plot_control_panel(tf)
 
     def _build_column_selector(self, p):
-        f = ttk.LabelFrame(p, text="数值列")
+        f = ttk.LabelFrame(p, text="数据选择")
         f.pack(side=tk.LEFT, fill=tk.Y, padx=4, pady=4)
         self.left_inner = ttk.Frame(f)
         self.left_inner.pack()
@@ -1138,6 +1141,7 @@ class Model_Fitting_App(tk.Toplevel):
             s.combo["values"] = self.value_columns
             s.columns = self.value_columns
             if self.value_columns:
+                s.var.set(self.value_columns[0])  # 显式同步 StringVar，避免 current(0) 未触发更新
                 s.combo.current(0)
         self.update_plot()
 
@@ -1512,36 +1516,50 @@ class Model_Fitting_App(tk.Toplevel):
         self._log.info("显示数据点详情弹窗: %d 个点", len(sm))
         top = tk.Toplevel(self)
         top.title("数据点详情")
-        top.geometry("650x500")
 
         tv = ttk.Treeview(top, columns=("PART_ID", "值"), show="tree headings")
         tv.heading("PART_ID", text="PART_ID")
         tv.heading("值", text="值")
-        tv.column("PART_ID", width=150, anchor="w")
-        tv.column("值", width=150, anchor="e")
 
         # 按列→分组组织，同时收集最大文本宽度
-        max_len = 0
+        max_tree_len = 0
+        max_pid_len = len("PART_ID")
+        max_val_len = len("值")
         by_col = {}
         for s in sm:
             by_col.setdefault(s["col"], []).append(s)
-            max_len = max(max_len, len(s["col"]))
+            max_tree_len = max(max_tree_len, len(s["col"]))
         for col, items in sorted(by_col.items()):
             cn = tv.insert("", tk.END, text=col, values=("", ""), open=True)
             by_grp = {}
             for s in items:
                 r = self.data.iloc[s["df_idx"]]
                 g = r.get(self.group_column, "-") if self.group_column else "-"
-                max_len = max(max_len, len(str(g)))
+                max_tree_len = max(max_tree_len, len(str(g)))
                 pid = str(r.get("PART_ID", r.get("part_id", str(s["df_idx"]))))
-                by_grp.setdefault(g, []).append((pid, s["x_raw"]))
+                val_str = f"{s['x_raw']:.6g}"
+                max_pid_len = max(max_pid_len, len(pid))
+                max_val_len = max(max_val_len, len(val_str))
+                by_grp.setdefault(g, []).append((pid, val_str))
             for g, pts in sorted(by_grp.items()):
                 gn = tv.insert(cn, tk.END, text=g, values=("", ""), open=True)
                 for pid, val in pts:
-                    tv.insert(gn, tk.END, text="", values=(pid, f"{val:.6g}"))
+                    tv.insert(gn, tk.END, text="", values=(pid, val))
 
-        # 自适应列宽：每字符约 10px + 缩进余量
-        tv.column("#0", width=max(80, max_len * 10 + 40), anchor="w", stretch=False)
+        # 自适应列宽：每字符约 9px + 缩进余量
+        tree_w = max(80, max_tree_len * 9 + 50)
+        pid_w = max(70, max_pid_len * 9 + 20)
+        val_w = max(60, max_val_len * 9 + 20)
+        tv.column("#0", width=tree_w, anchor="w", stretch=False)
+        tv.column("PART_ID", width=pid_w, anchor="w")
+        tv.column("值", width=val_w, anchor="e")
+
+        # 窗口宽度 = 列宽总和 + 滚动条 + 边框余量
+        total_w = tree_w + pid_w + val_w + 30
+        # 高度根据数据量自适应，最少 200，最多 600
+        row_h = min(len(sm), 30)
+        total_h = max(200, min(600, 120 + row_h * 22))
+        top.geometry(f"{total_w}x{total_h}")
 
         sy = ttk.Scrollbar(top, orient=tk.VERTICAL, command=tv.yview)
         sx = ttk.Scrollbar(top, orient=tk.HORIZONTAL, command=tv.xview)

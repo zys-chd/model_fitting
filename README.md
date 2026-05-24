@@ -2,6 +2,7 @@
 
 基于 Python 的可靠性工程分布拟合 GUI 工具，支持 9 种分布模型、交互式数据选择、离群点去除、limit 分析。
 
+
 ## 功能特性
 
 - **9 种分布模型**：Weibull (2P/3P)、Exponential、Lognormal、Normal、Gamma、LogLogistic、Gumbel、Birnbaum-Saunders
@@ -17,17 +18,17 @@
 ## 运行环境
 
 - Python 3.10+
-- 依赖：`numpy scipy pandas matplotlib`
+- 依赖见 `requirements.txt`
 
 ```bash
-pip install numpy scipy pandas matplotlib
+pip install -r requirements.txt
 ```
 
 ## 快速开始
 
 ```bash
 # 直接运行
-python app.py
+python model_fitting_app.py
 
 # 带 CSV 参数
 python run.py data.csv
@@ -48,8 +49,57 @@ launch(dataframe=pd.read_csv("data.csv"))
 # 方式2：launch() + CSV 路径
 launch(csv_path="data.csv")
 
-# 方式3：App 作为子窗口嵌入
-app = App(parent=root, dataframe=df)
+# 方式3：嵌入到其他 tkinter 窗口
+app = Model_Fitting_App(parent=my_tk_window, dataframe=df)
+```
+
+---
+
+## 添加自定义分布模型
+
+详见 [docs/add-model.md](docs/add-model.md)，3 步即可新增：创建模型文件 → 注册到 `models/__init__.py` → 注册到 `config.py`。
+
+---
+
+## 文档
+
+| 文档 | 说明 |
+|---|---|
+| [docs/add-model.md](docs/add-model.md) | 添加自定义分布模型 — 代码模板 + 注册步骤 |
+| [docs/architecture.md](docs/architecture.md) | 架构总览 — 模块职责、数据流、事件回调链、UI 布局 |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | 常见问题 — 拟合失败、打包异常、中文乱码等排查 |
+
+---
+
+## 项目结构
+
+```
+model_fitting/
+├── model_fitting_app.py   # 主窗口 + launch() 入口
+├── run.py                 # CLI 入口
+├── config.py              # 全局配置（字体、颜色、模型注册表）
+├── utils.py               # 工具函数（列检测、测试数据生成）
+├── widgets.py             # 可复用 UI 组件（SeriesSelector）
+├── VERSION                # 版本号文件
+├── requirements.txt       # 依赖
+├── README.md
+├── docs/
+│   ├── add-model.md       # 添加自定义模型指南
+│   ├── architecture.md    # 架构总览
+│   └── troubleshooting.md # 常见问题
+├── models/
+│   ├── __init__.py        # 模型注册中心
+│   ├── base.py            # 抽象基类 DistributionModel
+│   ├── weibull.py         # Weibull-2P
+│   ├── weibull3p.py       # Weibull-3P
+│   ├── exponential.py     # Exponential
+│   ├── lognormal.py       # Lognormal
+│   ├── normal.py          # Normal
+│   ├── gamma.py           # Gamma
+│   ├── loglogistic.py     # Log-Logistic
+│   ├── gumbel.py          # Gumbel
+│   └── birnbaum_saunders.py  # Birnbaum-Saunders
+└── log/                   # 运行日志
 ```
 
 ## 数据格式
