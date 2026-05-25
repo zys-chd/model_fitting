@@ -52,3 +52,9 @@ GROUP_CANDIDATES = ['group', 'Group', 'GROUP', '组', '分组']
 
 # ============ ID 列候选名 ============
 ID_CANDIDATES = ['PART_ID', 'part_id']
+
+# ============ 列名后缀过滤 ============
+# 若列名以这些后缀结尾，且存在同基名不同后缀的列组，可配置只保留 _shift 结尾的列
+COLUMN_SUFFIX_CANDIDATES = ['_T0', '_After', '_shift']
+# 默认关闭：需用户手动在界面中开启
+FILTER_KEEP_SHIFT_ONLY_DEFAULT = False

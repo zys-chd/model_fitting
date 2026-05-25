@@ -102,26 +102,28 @@ def _setup_logger(iid):
 
 # ---- 导入（优先相对导入避免联合打包时与其他项目的模块冲突） ----
 def _import_modules():
-    global detect_columns, generate_test_data, default_test_path
+    global detect_columns, generate_test_data, default_test_path, filter_columns_keep_shift_only
     global FONT_FAMILY, FONT_SIZE, MAX_SERIES, COLORS
     global SCALE_DISPLAY, SCALE_MAP, TRANSFORM_OPTIONS, MODEL_DISPLAY, MODEL_KEY_MAP
-    global MODEL_INSTANCES, SeriesSelector
+    global MODEL_INSTANCES, SeriesSelector, FILTER_KEEP_SHIFT_ONLY_DEFAULT
     try:
         # 优先相对导入（精确、不与其他项目冲突）
         from .config import (FONT_FAMILY, FONT_SIZE, MAX_SERIES, COLORS,
                              SCALE_DISPLAY, SCALE_MAP, TRANSFORM_OPTIONS,
-                             MODEL_DISPLAY, MODEL_KEY_MAP)
+                             MODEL_DISPLAY, MODEL_KEY_MAP,
+                             FILTER_KEEP_SHIFT_ONLY_DEFAULT)
         from .models import MODEL_INSTANCES
         from .widgets import SeriesSelector
-        from .utils import detect_columns, generate_test_data, default_test_path
+        from .utils import detect_columns, generate_test_data, default_test_path, filter_columns_keep_shift_only
     except ImportError:
         # 直接运行时回退绝对导入
         from config import (FONT_FAMILY, FONT_SIZE, MAX_SERIES, COLORS,
                             SCALE_DISPLAY, SCALE_MAP, TRANSFORM_OPTIONS,
-                            MODEL_DISPLAY, MODEL_KEY_MAP)
+                            MODEL_DISPLAY, MODEL_KEY_MAP,
+                            FILTER_KEEP_SHIFT_ONLY_DEFAULT)
         from models import MODEL_INSTANCES
         from widgets import SeriesSelector
-        from utils import detect_columns, generate_test_data, default_test_path
+        from utils import detect_columns, generate_test_data, default_test_path, filter_columns_keep_shift_only
 
 _import_modules()
 
@@ -187,6 +189,7 @@ class Model_Fitting_App(tk.Toplevel):
         self._active_selector_idx = None
         self._visibility = {}  # {(col, group): True/False}
         self._col_legends = {}  # col → column header legend handle
+        self._filter_shift_only = tk.BooleanVar(value=FILTER_KEEP_SHIFT_ONLY_DEFAULT)
 
         self._build_ui()
         self.max_series = MAX_SERIES
@@ -658,6 +661,16 @@ class Model_Fitting_App(tk.Toplevel):
         )
         r += 1
 
+        # 列名后缀过滤开关：只保留 _shift 结尾的列，去除同基名 _T0 / _After
+        self._filter_shift_cb = ttk.Checkbutton(
+            c,
+            text="仅保留 _shift 列",
+            variable=self._filter_shift_only,
+            command=self._on_filter_shift_toggle,
+        )
+        self._filter_shift_cb.grid(row=r, column=0, columnspan=4, sticky="w", padx=2, pady=(0, 2))
+        r += 1
+
         LW = 5
         ttk.Label(
             c, text="模型：", width=LW, anchor="e", font=(FONT_FAMILY, FONT_SIZE)
@@ -955,6 +968,13 @@ class Model_Fitting_App(tk.Toplevel):
         self.formula_fig.canvas.draw_idle()
         self.update_plot()
 
+    def _on_filter_shift_toggle(self):
+        """列名后缀过滤开关回调：重新加载数据时应用过滤"""
+        self._log.info("仅保留_shift列开关: %s", self._filter_shift_only.get())
+        if self.original_data is not None:
+            # 重新应用原始数据并刷新
+            self._apply_dataframe(self.original_data.copy())
+
     # ==================== 离群点 ====================
 
     def _on_manual_remove(self, sel):
@@ -990,12 +1010,20 @@ class Model_Fitting_App(tk.Toplevel):
         for meta in self._plot_meta:
             if meta["selector_idx"] != sel.idx or meta["col"] != c:
                 continue
+            # 跳过已隐藏的 group
+            key = (c, meta.get("group") if meta.get("group") else "All")
+            if not self._visibility.get(key, True):
+                continue
             try:
                 popt, _, _, _, _ = model.fit(meta["samples"])
                 yp = model.cdf(meta["samples"], popt)
                 yt = (np.arange(1, len(yp) + 1) - 0.3) / (len(yp) + 0.4)
                 res = np.abs(yt - yp)
-                th = 3 * np.std(res)
+                # 使用 MAD（中位数绝对偏差）替代 3*std，对离群点更稳健
+                med = np.median(res)
+                mad = np.median(np.abs(res - med))
+                # 1.4826 为正态分布一致性常数，threshold = median + k * 1.4826 * MAD
+                th = med + 3.0 * 1.4826 * mad if mad > 0 else 3.0 * np.std(res)
                 mask = res > th
                 if mask.any():
                     drop = meta["df_indices"][mask]
@@ -1048,6 +1076,10 @@ class Model_Fitting_App(tk.Toplevel):
                 self._active_selector_idx is not None
                 and m["selector_idx"] != self._active_selector_idx
             ):
+                continue
+            # 跳过已隐藏的 group
+            key = (m["col"], m.get("group") if m.get("group") else "All")
+            if not self._visibility.get(key, True):
                 continue
             inside = (
                 (m["xs"] >= xmin)
@@ -1121,6 +1153,14 @@ class Model_Fitting_App(tk.Toplevel):
     # ==================== 数据加载 ====================
 
     def _apply_dataframe(self, df):
+        # 若开启"仅保留 _shift 列"开关，则过滤列名
+        if self._filter_shift_only.get():
+            before_cols = list(df.columns)
+            keep_cols = filter_columns_keep_shift_only(before_cols)
+            removed = set(before_cols) - set(keep_cols)
+            if removed:
+                self._log.info("后缀过滤: 移除列 %s，保留 %d 列", sorted(removed), len(keep_cols))
+                df = df[keep_cols]
         info = detect_columns(df)
         self.data = df
         self.original_data = df.copy()
@@ -1461,6 +1501,10 @@ class Model_Fitting_App(tk.Toplevel):
                         self._active_selector_idx is not None
                         and m["selector_idx"] != self._active_selector_idx
                     ):
+                        continue
+                    # 跳过已隐藏的 group
+                    key = (m["col"], m.get("group") if m.get("group") else "All")
+                    if not self._visibility.get(key, True):
                         continue
                     sel = []
                     for i in event.ind:
