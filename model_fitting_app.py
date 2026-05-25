@@ -1178,11 +1178,7 @@ class Model_Fitting_App(tk.Toplevel):
             self.group_column,
         )
         for s in self.selectors:
-            s.combo["values"] = self.value_columns
-            s.columns = self.value_columns
-            if self.value_columns:
-                s.var.set(self.value_columns[0])  # 显式同步 StringVar，避免 current(0) 未触发更新
-                s.combo.current(0)
+            s.update_columns(self.value_columns)
         self.update_plot()
 
     def load_dataframe(self, df):

@@ -65,8 +65,11 @@ class SeriesSelector(ttk.Frame):
         # 单行：测试项选择下拉 + 移除 + 手动去除 + 自动去除 + 恢复
         ttk.Label(self, text=f"测试项 {idx + 1}：",
                   font=(FONT_FAMILY, FONT_SIZE)).pack(side=tk.LEFT, padx=2)
+
+        # 根据最宽选项自适应宽度（中文字符按 2 字符宽度计）
+        combo_width = max(14, self._calc_combo_width(columns)) if columns else 14
         self.combo = ttk.Combobox(self, values=columns,
-                                  textvariable=self.var, state='readonly', width=14)
+                                  textvariable=self.var, state='readonly', width=combo_width)
         if columns:
             self.combo.current(0)
         self.combo.pack(side=tk.LEFT)
@@ -108,6 +111,26 @@ class SeriesSelector(ttk.Frame):
     def _on_remove(self):
         if self.remove_callback:
             self.remove_callback(self)
+
+    @staticmethod
+    def _calc_combo_width(columns):
+        """根据最宽选项计算 combobox 宽度（中文字符按 2 单位计）"""
+        if not columns:
+            return 14
+        max_w = 0
+        for col in columns:
+            w = sum(2 if ord(c) > 127 else 1 for c in str(col))
+            max_w = max(max_w, w)
+        # 留 2 字符余量
+        return max_w + 2
+
+    def update_columns(self, columns):
+        """更新可选列并自适应宽度"""
+        self.columns = list(columns)
+        self.combo["values"] = self.columns
+        self.combo["width"] = self._calc_combo_width(self.columns)
+        if self.columns and self.var.get() not in self.columns:
+            self.var.set(self.columns[0])
 
     def _on_selection_change(self, event=None):
         if self.selection_change_callback:
