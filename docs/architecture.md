@@ -1,32 +1,110 @@
-# 架构总览
+# 架构总览（v2 — MVP 重构）
+
+## 设计模式
+
+**MVP（Model-View-Presenter）+ 策略模式（ABC + Registry）**
+
+```
+┌──────────────┐     调用      ┌──────────────────┐     渲染     ┌──────────────┐
+│   View (UI)  │ ───────────→ │   Presenter       │ ──────────→ │   View (UI)  │
+│  AppWindow   │              │  (纯 Python)      │             │  display_*() │
+│  (tk.Toplevel)│ ←─────────── │  FittingPresenter │              │              │
+└──────────────┘   推送数据    └────────┬─────────┘              └──────────────┘
+                                       │
+                          ┌────────────┼────────────┐
+                          ▼            ▼            ▼
+                   ┌──────────┐ ┌──────────┐ ┌──────────┐
+                   │ Services │ │ Plotting │ │ Models   │
+                   │ (纯逻辑) │ │ (纯绘图) │ │ (拟合)   │
+                   └──────────┘ └──────────┘ └──────────┘
+```
 
 ## 模块职责
 
 ```
 model_fitting/
-├── model_fitting_app.py   # 🎯 主窗口 + 编排层
-├── config.py              # ⚙️ 全局常量（字体、颜色、模型注册表）
-├── utils.py               # 🔧 工具函数（列检测、测试数据生成）
-├── widgets.py             # 🧩 UI 组件（SeriesSelector）
-├── models/
-│   ├── base.py            # 📐 抽象基类 DistributionModel
-│   ├── __init__.py        # 📋 模型注册中心 MODEL_INSTANCES
-│   └── *.py               # 📊 各分布模型实现
-├── run.py                 # 🚀 CLI 入口
-├── VERSION                # 🏷 版本号
-└── log/                   # 📝 运行日志
+├── presenter.py              # 🎯 MVP Presenter — 核心协调器（纯 Python）
+├── model_fitting_app.py      # 🔄 旧版窗口（向后兼容，保留）
+├── config.py                 # ⚙️ 全局常量
+├── utils.py                  # 🔧 工具函数
+│
+├── services/                 # 🔬 业务逻辑层（零 GUI 依赖）
+│   ├── data_service.py       # 数据加载/列检测/过滤
+│   ├── fitting_service.py    # 拟合调度/离群检测
+│   ├── stats_service.py      # 统计量计算
+│   ├── export_service.py     # 导出逻辑
+│   │
+│   ├── transform_registry.py       # 🧩 变换模式策略（CDF / lnln）
+│   ├── stat_registry.py            # 🧩 统计指标计算器
+│   ├── file_handler_registry.py    # 🧩 文件格式处理器
+│   ├── outlier_registry.py         # 🧩 离群检测策略
+│   ├── cdf_estimator_registry.py   # 🧩 经验 CDF 估计器
+│   └── export_handler_registry.py  # 🧩 导出格式处理器
+│
+├── plotting/                 # 🎨 绘图层（依赖 matplotlib，不依赖 tkinter）
+│   ├── plot_data.py          # FitResult / PlotSpec / SeriesPlotData dataclass
+│   └── plot_manager.py       # PlotManager: build_figure()
+│
+├── ui/                       # 🖥️ 视图层（依赖 tkinter）
+│   ├── app_window.py         # AppWindow 主窗口（实现 AppViewProtocol）
+│   └── widgets/
+│       └── series_selector.py # SeriesSelector 组件
+│
+├── models/                   # 📊 分布模型（ABC + 策略模式）
+│   ├── base.py               # DistributionModel ABC（含 @abstractmethod）
+│   ├── __init__.py            # MODEL_INSTANCES 注册中心
+│   └── *.py                  # 9 个分布模型
+│
+├── tests/                    # 🧪 单元测试套件
+│   ├── conftest.py
+│   ├── test_services/        # 扩展点 + Service 测试
+│   ├── test_plotting/        # 绘图测试
+│   ├── test_presenter/       # Presenter 测试
+│   └── test_integration/     # 集成测试
+│
+├── run.py                    # 🚀 入口
+└── docs/                     # 📖 文档
+```
+
+## 六大扩展点（ABC + Registry）
+
+| 扩展点 | ABC 类 | Registry | 新增方式 |
+|--------|--------|----------|---------|
+| 变换模式 | `TransformStrategy` | `TRANSFORM_REGISTRY` | 继承 + 注册一行 |
+| 统计指标 | `StatCalculator` | `STAT_REGISTRY` | 继承 + 注册 + 加入 Composite |
+| 文件格式 | `FileFormatHandler` | `FILE_HANDLERS` | 继承 + 加入列表 |
+| 离群检测 | `OutlierDetector` | `OUTLIER_REGISTRY` | 继承 + 注册一行 |
+| CDF 估计 | `CDFEstimator` | `CDF_ESTIMATOR_REGISTRY` | 继承 + 注册一行 |
+| 导出格式 | `ExportHandler` | `EXPORT_REGISTRY` | 继承 + 注册一行 |
+
+## 核心数据流 (MVP)
+
+```
+用户操作 → View 回调 → Presenter 方法 → Service 层 → 结果 → View 渲染
+
+具体步骤（update_all）：
+1. View.get_selected_columns() → [(idx, col_name), ...]
+2. View.get_series_styles() → [{marker, linestyle, limit}, ...]
+3. FittingService.fit_single(samples, model_key) → FitResult
+4. StatsService.compute_all(samples, ...) → stats dict
+5. PlotManager.build_figure(PlotSpec) → matplotlib Figure
+6. View.display_plot(figure) → 嵌入 TkAgg 画布
+7. View.display_stats(data) → 更新统计树
 ```
 
 ## 类层次
 
 ```
 tk.Toplevel
-  └── Model_Fitting_App          # 主窗口（继承 Toplevel，可独立或嵌入）
+  ├── Model_Fitting_App          # 旧版窗口（向后兼容）
+  └── AppWindow                  # 新版 MVP 窗口
+
+FittingPresenter                 # 协调器（纯 Python）
 
 ttk.Frame
-  └── SeriesSelector             # 数值列选择组件（每列一个实例）
+  └── SeriesSelector             # 数值列选择组件
 
-DistributionModel (ABC)          # 模型抽象基类
+DistributionModel (ABC)          # 模型抽象基类（含 @abstractmethod）
   ├── WeibullModel
   ├── Weibull3PModel
   ├── ExponentialModel
@@ -36,48 +114,36 @@ DistributionModel (ABC)          # 模型抽象基类
   ├── LogLogisticModel
   ├── GumbelModel
   └── BirnbaumSaundersModel
-```
 
-## UI 布局
+TransformStrategy (ABC)          # 变换策略
+  ├── CDFTransform
+  └── LnLnTransform
 
-```
-┌──────────────────────────────────────────────────────┐
-│  菜单栏: 文件 | 数据 | 绘图 | 关于                      │
-├───────────────┬──────────────────┬───────────────────┤
-│  数值列        │  数据控制          │  绘图控制           │
-│  ┌──────────┐ │  模型: [▼]       │  X轴: [▼] Y轴: [▼] │
-│  │Selector 0│ │  变换: [▼]       │  主题: [▼]          │
-│  │Selector 1│ │  [添加列][移除列] │  X范围: [_]~[_]    │
-│  │  ...     │ │  [导出图][导出参数]│  Y范围: [_]~[_]    │
-│  └──────────┘ │  ┌─公式显示──┐   │  [取消选中][应用范围]│
-│               │  │ F(x)=...  │   │  [绘制limit线]     │
-│               │  └──────────┘   │                    │
-├───────────────┴──────────────────┴───────────────────┤
-│  图表 (matplotlib FigureCanvasTkAgg)                  │
-│  ┌────────────────────────────────────────────────┐  │
-│  │           散点 + 拟合曲线                         │  │
-│  │           CDF / ln(-ln(1-CDF))                  │  │
-│  └────────────────────────────────────────────────┘  │
-│  [matplotlib 工具栏: 缩放/平移/保存]                   │
-├──────────────────────────────────────────────────────┤
-│  统计信息 (ttk.Treeview)         │ 模式提示 (mode_label)│
-│  ☑ IDSS1                        │                     │
-│    ☑ GroupA  模型: Weibull      │                     │
-│              R²: 0.9876          │                     │
-│              β: 1.52             │                     │
-│              η: 48.3             │                     │
-│              样本数: 40           │                     │
-│              ...                 │                     │
-└──────────────────────────────────┴─────────────────────┘
-```
+StatCalculator (ABC)             # 统计计算器
+  ├── BasicStatsCalculator
+  └── FitAtLimitCalculator
 
-## 核心数据流
+FileFormatHandler (ABC)          # 文件格式处理器
+  ├── CSVHandler
+  ├── ExcelHandler
+  ├── ParquetHandler
+  └── JSONHandler
 
+OutlierDetector (ABC)            # 离群检测器
+  ├── MADOutlierDetector
+  ├── ZScoreOutlierDetector
+  └── IQROutlierDetector
+
+CDFEstimator (ABC)               # CDF 估计器
+  ├── MedianRankEstimator
+  ├── MeanRankEstimator
+  └── KaplanMeierEstimator
+
+ExportHandler (ABC)              # 导出处理器
+  ├── CSVExportHandler
+  ├── JSONExportHandler
+  └── ExcelExportHandler
 ```
-load_csv / load_dataframe
-        │
-        ▼
-  _load_data(path)          ← 文件对话框 or launch(csv_path=)
         │
         ▼
   pd.read_csv / pd.read_excel

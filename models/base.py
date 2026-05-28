@@ -2,11 +2,15 @@
 分布模型抽象基类
 所有分布模型必须继承此类并实现 fit / cdf / get_formula / get_param_names
 """
+from abc import ABC, abstractmethod
+from typing import Optional
 import numpy as np
 
 
-class DistributionModel:
-    """分布模型基类"""
+class DistributionModel(ABC):
+    """分布模型基类 — 抽象基类"""
+
+    KEY: str = ""  # 子类必须定义，如 "Weibull"
 
     def __init__(self, name: str):
         self.name = name
@@ -14,21 +18,38 @@ class DistributionModel:
         self.pcov = None
         self.r_squared = None
 
-    def fit(self, samples):
-        """拟合模型到样本数据，返回 (params, pcov, r_squared, xs, cdf)"""
-        raise NotImplementedError
+    @abstractmethod
+    def fit(self, samples, cdf_estimator=None):
+        """
+        拟合模型到样本数据。
 
+        Parameters
+        ----------
+        samples : array-like
+            原始样本数据
+        cdf_estimator : CDFEstimator, optional
+            经验 CDF 估计器，默认为 None 时内部使用 prepare_cdf_data
+
+        Returns
+        -------
+        (params, pcov, r_squared, xs, cdf)
+        """
+        ...
+
+    @abstractmethod
     def cdf(self, x, params):
         """计算 x 处的累积分布函数值"""
-        raise NotImplementedError
+        ...
 
+    @abstractmethod
     def get_formula(self):
-        """返回公式字符串"""
-        raise NotImplementedError
+        """返回 LaTeX 公式字符串"""
+        ...
 
+    @abstractmethod
     def get_param_names(self):
         """返回参数名列表"""
-        raise NotImplementedError
+        ...
 
     def get_description(self) -> str:
         """返回模型介绍文本（可选重写）"""
