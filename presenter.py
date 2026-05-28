@@ -18,8 +18,11 @@ from services.outlier_registry import OutlierDetector
 from services.file_handler_registry import FileFormatRegistry
 from plotting.plot_data import PlotSpec, SeriesPlotData, FitResult as PlotFitResult
 from plotting.plot_manager import PlotManager
+from config import SHOW_FIT_CURVE_DEFAULT
 
 logger = logging.getLogger(__name__)
+
+_MISSING = object()  # sentinel for "not provided" in _apply_data
 
 
 class AppState:
@@ -42,8 +45,9 @@ class AppState:
         self.filter_shift_only: bool = False
         self.fit_results: dict = {}
         self.stats_cache: dict = {}
-        self.series_meta: list = []  # [{selector_idx, col, group, ...}]
-        self.visibility: dict = {}  # {(col, group): True/False}
+        self.series_meta: list = []  # [{selector_idx, col, group, df_indices, ...}]
+        self.visibility: dict = {}  # {(col, group): {"scatter": bool, "curve": bool}}
+        self.removed_points: dict = {}  # {col: [df_index, ...]} 显式跟踪去除点
 
 
 class FittingPresenter:
@@ -101,19 +105,47 @@ class FittingPresenter:
             logger.error("生成测试数据失败: %s", e)
             self._view.show_error("生成错误", str(e))
 
-    def _apply_data(self, df: pd.DataFrame) -> None:
-        """应用 DataFrame 到内部状态"""
-        if self._state.filter_shift_only:
-            df = self._data_service.filter_shift_only(df)
+    def _apply_data(self, df: pd.DataFrame, force_group_col=_MISSING) -> None:
+        """应用 DataFrame 到内部状态
+        force_group_col: _MISSING=auto-detect, None=无分组, str=指定列
+        """
+        # original_data：仅在首次加载时设置，shift 过滤不覆盖
+        if self._state.original_data is None:
+            self._state.original_data = df.copy()
+
+        # 先检测结构，再对 value 列做 shift 过滤
         info = self._data_service.detect_structure(df)
+
+        if self._state.filter_shift_only and info["value_columns"]:
+            keep_cols = set(info.get("id_columns", []))
+            if info["group_column"]:
+                keep_cols.add(info["group_column"])
+            shifted = [c for c in info["value_columns"] if c.endswith("_shift")]
+            keep_cols.update(shifted)
+            df = df[[c for c in df.columns if c in keep_cols]]
+            info = self._data_service.detect_structure(df)
+
+        # 将数值列强制转换为 numeric
+        for c in info["value_columns"]:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
         self._state.data = df
-        self._state.original_data = df.copy()
         self._state.columns = info["columns"]
-        self._state.group_column = info["group_column"]
-        self._state.value_columns = info["value_columns"]
+
+        if force_group_col is not _MISSING:
+            self._state.group_column = force_group_col
+        else:
+            self._state.group_column = info["group_column"]
+
+        if self._state.group_column:
+            self._state.value_columns = [c for c in info["value_columns"] if c != self._state.group_column]
+        else:
+            self._state.value_columns = info["value_columns"]
+
         self._state.fit_results.clear()
         self._state.stats_cache.clear()
         self._state.visibility.clear()
+        self._state.removed_points.clear()
         self._state.series_meta.clear()
         self._view.update_series_columns(self._state.value_columns)
         logger.info(
@@ -159,6 +191,8 @@ class FittingPresenter:
 
     def set_filter_shift_only(self, enabled: bool) -> None:
         self._state.filter_shift_only = enabled
+        if self._state.original_data is not None:
+            self._apply_data(self._state.original_data.copy())
 
     # ==================== 核心：update_all ====================
 
@@ -189,10 +223,13 @@ class FittingPresenter:
         all_fit_results = {}  # {(col, group): (model_name, params, r2, xs, cdf)}
         all_stats = {}
         series_plot_data_list = []
+        fit_errors: list[str] = []
         self._state.series_meta = []
 
         for si, col_name in selected_columns:
             if not col_name or col_name not in self._state.data.columns:
+                if col_name:
+                    fit_errors.append(f"列 '{col_name}' 不在数据中")
                 continue
 
             style = series_styles[si] if si < len(series_styles) else {}
@@ -201,12 +238,14 @@ class FittingPresenter:
             limit = style.get("limit", 0)
 
             if self._state.group_column:
+                col_has_data = False
                 for g in groups:
                     sub = self._state.data.loc[
                         self._state.data[self._state.group_column] == g, col_name
                     ].dropna()
                     if len(sub) < 3:
                         continue
+                    col_has_data = True
                     try:
                         fit_result = self._fitting_service.fit_single(
                             sub.values,
@@ -215,7 +254,7 @@ class FittingPresenter:
                             transform_key=self._state.current_transform_key,
                         )
                     except Exception as e:
-                        logger.warning("拟合失败 %s[%s]: %s", col_name, g, e)
+                        fit_errors.append(f"拟合失败 {col_name}[{g}]: {e}")
                         continue
 
                     # 存储拟合结果
@@ -238,6 +277,10 @@ class FittingPresenter:
                     fit_y_raw = model.cdf(fit_x, fit_result.params)
                     fit_y = transform.transform(fit_y_raw)
 
+                    vis_entry = self._state.visibility.get(key, {
+                        "scatter": True,
+                        "curve": SHOW_FIT_CURVE_DEFAULT,
+                    })
                     spd = SeriesPlotData(
                         col_name=col_name,
                         group=g,
@@ -251,16 +294,22 @@ class FittingPresenter:
                         r_squared=fit_result.r_squared,
                         selector_idx=si,
                         samples=sub.values,
+                        scatter_visible=vis_entry.get("scatter", True),
+                        curve_visible=vis_entry.get("curve", SHOW_FIT_CURVE_DEFAULT),
                     )
                     series_plot_data_list.append(spd)
 
                     self._state.series_meta.append({
                         "col": col_name, "group": g, "selector_idx": si,
                         "color": gcolors[g], "marker": marker, "linestyle": linestyle,
+                        "df_indices": sub.index.values,
                     })
+                if not col_has_data:
+                    fit_errors.append(f"列 '{col_name}' 在所有分组中有效数据均不足（需≥3个非空值）")
             else:
                 sub = self._state.data[col_name].dropna()
                 if len(sub) < 3:
+                    fit_errors.append(f"列 '{col_name}' 有效数据不足（需≥3个非空值）")
                     continue
                 try:
                     fit_result = self._fitting_service.fit_single(
@@ -270,7 +319,7 @@ class FittingPresenter:
                         transform_key=self._state.current_transform_key,
                     )
                 except Exception as e:
-                    logger.warning("拟合失败 %s: %s", col_name, e)
+                    fit_errors.append(f"拟合失败 {col_name}: {e}")
                     continue
 
                 key = (col_name, "All")
@@ -289,6 +338,10 @@ class FittingPresenter:
                 fit_y_raw = model.cdf(fit_x, fit_result.params)
                 fit_y = transform.transform(fit_y_raw)
 
+                vis_entry = self._state.visibility.get(key, {
+                    "scatter": True,
+                    "curve": SHOW_FIT_CURVE_DEFAULT,
+                })
                 spd = SeriesPlotData(
                     col_name=col_name,
                     group=None,
@@ -302,16 +355,23 @@ class FittingPresenter:
                     r_squared=fit_result.r_squared,
                     selector_idx=si,
                     samples=sub.values,
+                    scatter_visible=vis_entry.get("scatter", True),
+                    curve_visible=vis_entry.get("curve", SHOW_FIT_CURVE_DEFAULT),
                 )
                 series_plot_data_list.append(spd)
 
                 self._state.series_meta.append({
                     "col": col_name, "group": "All", "selector_idx": si,
                     "color": gcolors.get("All", "blue"), "marker": marker, "linestyle": linestyle,
+                    "df_indices": sub.index.values,
                 })
 
         self._state.fit_results = all_fit_results
         self._state.stats_cache = all_stats
+
+        # 报告拟合异常（一次弹窗汇总所有错误）
+        if fit_errors:
+            self._view.show_fit_errors(fit_errors)
 
         # 5. 构建 PlotSpec
         scale_map = {"线性": "linear", "对数": "log"}
@@ -344,7 +404,7 @@ class FittingPresenter:
         return ["All"]
 
     def _build_stats_tree_data(self, fit_results, stats_cache) -> list:
-        """构建统计树数据（供 View 渲染）"""
+        """构建统计树数据（供 View 渲染），含散点/曲线分离可见性"""
         data = []
         try:
             model = self._fitting_service.get_model(self._state.current_model_key)
@@ -353,12 +413,17 @@ class FittingPresenter:
 
         for (col, grp), (mn, params, r2, xs, cdf) in sorted(fit_results.items()):
             stats = stats_cache.get((col, grp), {})
-            vis = self._state.visibility.get((col, grp), True)
+            vis_entry = self._state.visibility.get((col, grp), {
+                "scatter": True,
+                "curve": SHOW_FIT_CURVE_DEFAULT,
+            })
             item = {
                 "col": col,
                 "group": grp,
                 "model_name": mn,
-                "visible": vis,
+                "scatter_visible": vis_entry.get("scatter", True),
+                "curve_visible": vis_entry.get("curve", SHOW_FIT_CURVE_DEFAULT),
+                "visible": vis_entry.get("scatter", True) and vis_entry.get("curve", SHOW_FIT_CURVE_DEFAULT),
                 "params": list(zip(model.get_param_names(), params)),
                 "r_squared": r2,
                 "stats": stats,
@@ -387,7 +452,8 @@ class FittingPresenter:
             if meta["selector_idx"] != selector_idx or meta.get("col") != col:
                 continue
             key = (col, meta.get("group", "All"))
-            if not self._state.visibility.get(key, True):
+            vis_entry = self._state.visibility.get(key, {"scatter": True, "curve": True})
+            if not vis_entry.get("scatter", True) and not vis_entry.get("curve", True):
                 continue
 
             samples = self._state.data.loc[
@@ -404,6 +470,8 @@ class FittingPresenter:
                 if mask.any():
                     drop_indices = samples.index[mask]
                     self._state.data.loc[drop_indices, col] = np.nan
+                    for idx in drop_indices:
+                        self._state.removed_points.setdefault(col, []).append(idx)
                     cnt += int(mask.sum())
             except Exception as e:
                 logger.debug("自动去除拟合失败: %s", e)
@@ -427,6 +495,7 @@ class FittingPresenter:
             col = pt.get("col")
             if df_idx is not None and col:
                 self._state.data.loc[df_idx, col] = np.nan
+                self._state.removed_points.setdefault(col, []).append(df_idx)
 
         self._state.fit_results.clear()
         self._state.stats_cache.clear()
@@ -439,6 +508,7 @@ class FittingPresenter:
             self._state.original_data = None
             self._state.fit_results.clear()
             self._state.stats_cache.clear()
+            self._state.removed_points.clear()
             self.update_all()
 
     # ==================== 导出 ====================
@@ -470,20 +540,50 @@ class FittingPresenter:
     # ==================== 可见性 ====================
 
     def toggle_visibility(self, col: str, group: str) -> None:
+        """切换整体可见性（散点 + 曲线同步）"""
         key = (col, group)
-        vis = not self._state.visibility.get(key, True)
-        self._state.visibility[key] = vis
+        entry = dict(self._state.visibility.get(key, {
+            "scatter": True,
+            "curve": SHOW_FIT_CURVE_DEFAULT,
+        }))
+        new_vis = not (entry.get("scatter", True) and entry.get("curve", SHOW_FIT_CURVE_DEFAULT))
+        entry["scatter"] = new_vis
+        entry["curve"] = new_vis
+        self._state.visibility[key] = entry
         self.update_all()
 
     def toggle_column_visibility(self, col: str) -> None:
-        # 收集该列所有分组
+        """切换整列可见性"""
         keys = [k for k in self._state.visibility if k[0] == col]
         if not keys:
             return
-        all_vis = all(self._state.visibility.get(k, True) for k in keys)
-        new_vis = not all_vis
+        all_scat = all(self._state.visibility.get(k, {}).get("scatter", True) for k in keys)
+        all_curv = all(self._state.visibility.get(k, {}).get("curve", SHOW_FIT_CURVE_DEFAULT) for k in keys)
+        new_vis = not (all_scat and all_curv)
         for k in keys:
-            self._state.visibility[k] = new_vis
+            self._state.visibility[k] = {"scatter": new_vis, "curve": new_vis}
+        self.update_all()
+
+    def toggle_scatter_visibility(self, col: str, group: str) -> None:
+        """切换散点可见性"""
+        key = (col, group)
+        entry = dict(self._state.visibility.get(key, {
+            "scatter": True,
+            "curve": SHOW_FIT_CURVE_DEFAULT,
+        }))
+        entry["scatter"] = not entry.get("scatter", True)
+        self._state.visibility[key] = entry
+        self.update_all()
+
+    def toggle_curve_visibility(self, col: str, group: str) -> None:
+        """切换拟合曲线可见性"""
+        key = (col, group)
+        entry = dict(self._state.visibility.get(key, {
+            "scatter": True,
+            "curve": SHOW_FIT_CURVE_DEFAULT,
+        }))
+        entry["curve"] = not entry.get("curve", SHOW_FIT_CURVE_DEFAULT)
+        self._state.visibility[key] = entry
         self.update_all()
 
     # ==================== 查询方法 ====================
@@ -504,8 +604,12 @@ class FittingPresenter:
     def get_series_meta(self) -> list:
         return list(self._state.series_meta)
 
-    def get_visibility(self, col: str, group: str) -> bool:
-        return self._state.visibility.get((col, group), True)
+    def get_visibility(self, col: str, group: str) -> dict:
+        """返回 {scatter: bool, curve: bool}"""
+        return dict(self._state.visibility.get((col, group), {
+            "scatter": True,
+            "curve": SHOW_FIT_CURVE_DEFAULT,
+        }))
 
     def get_available_models(self) -> list[str]:
         return self._fitting_service.get_model_keys()
@@ -516,3 +620,171 @@ class FittingPresenter:
     def get_available_outlier_detectors(self) -> dict:
         from services.outlier_registry import OUTLIER_REGISTRY
         return dict(OUTLIER_REGISTRY)
+
+    # ==================== 会话保存/加载 ====================
+
+    def save_session(self, path: str) -> None:
+        """保存当前会话到 .rda 文件"""
+        if self._state.data is None:
+            self._view.show_error("保存失败", "没有可保存的数据")
+            return
+        from services.session_service import SessionService
+
+        # 收集 View 层配置（系列选择、样式）
+        series_config = self._view.get_series_config()
+
+        # 收集 Presenter 状态
+        state = {
+            "model_key": self._state.current_model_key,
+            "transform_key": self._state.current_transform_key,
+            "cdf_estimator_key": self._state.current_cdf_estimator_key,
+            "outlier_key": self._state.current_outlier_key,
+            "x_scale": self._state.x_scale,
+            "y_scale": self._state.y_scale,
+            "theme": self._state.theme,
+            "x_limits": list(self._state.x_limits),
+            "y_limits": list(self._state.y_limits),
+            "filter_shift_only": self._state.filter_shift_only,
+            "visibility": {str(k): v for k, v in self._state.visibility.items()},
+            "series_config": series_config,
+        }
+
+        try:
+            SessionService.save(
+                path,
+                original_df=self._state.original_data if self._state.original_data is not None else self._state.data,
+                state=state,
+                removed_points=self._state.removed_points,
+            )
+            self._view.show_info("保存成功", f"会话已保存至：\n{path}")
+        except Exception as e:
+            self._view.show_error("保存失败", str(e))
+
+    def load_session(self, path: str) -> None:
+        """加载 .rda 会话文件"""
+        from services.session_service import SessionService
+
+        try:
+            result = SessionService.load(path)
+        except Exception as e:
+            self._view.show_error("加载失败", str(e))
+            return
+
+        df = result["dataframe"]
+        state = result.get("state", {})
+
+        # 恢复配置
+        self._state.current_model_key = state.get("model_key", "Weibull")
+        self._state.current_transform_key = state.get("transform_key", "cdf")
+        self._state.current_cdf_estimator_key = state.get("cdf_estimator_key", "median_rank")
+        self._state.current_outlier_key = state.get("outlier_key", "mad")
+        self._state.x_scale = state.get("x_scale", "线性")
+        self._state.y_scale = state.get("y_scale", "线性")
+        self._state.theme = state.get("theme", "default")
+        xl = state.get("x_limits", [None, None])
+        yl = state.get("y_limits", [None, None])
+        self._state.x_limits = (xl[0] if xl else None, xl[1] if len(xl) > 1 else None)
+        self._state.y_limits = (yl[0] if yl else None, yl[1] if len(yl) > 1 else None)
+        self._state.filter_shift_only = state.get("filter_shift_only", False)
+
+        # 恢复 theme PlotManager
+        self._plot_manager.apply_theme(self._state.theme)
+
+        # 恢复去除点
+        removed = result.get("removed_points", {})
+        for col, indices in removed.items():
+            if col in df.columns:
+                for idx in indices:
+                    if idx in df.index:
+                        df.loc[idx, col] = np.nan
+        self._state.removed_points = removed
+
+        # 应用数据（会清除 visibility/series_meta/fit_results）
+        self._state.original_data = df.copy()
+        self._apply_data(df)
+
+        # ---- 以下恢复必须在 _apply_data 之后（因为 _apply_data 会清除状态） ----
+
+        # 恢复可见性
+        vis_raw = state.get("visibility", {})
+        for k_str, v in vis_raw.items():
+            try:
+                key = eval(k_str)
+                self._state.visibility[key] = v
+            except Exception:
+                pass
+
+        # 恢复系列配置（View 层：选择器数量、列选择、样式）
+        series_config = state.get("series_config", [])
+        if series_config:
+            self._view.restore_series_config(series_config)
+
+        # 同步 View 控件
+        self._view.sync_controls_from_state(state)
+
+        # 使用恢复后的选择器 + 可见性重新绘图
+        self.update_all()
+
+    # ==================== 附加数据 + 自定义导入 ====================
+
+    def append_file(self, path: str) -> None:
+        """附加数据文件到当前数据集"""
+        if self._state.data is None:
+            self._view.show_error("错误", "请先加载主数据文件")
+            return
+        try:
+            combined = self._data_service.append_file(self._state.data, path)
+            self._apply_data(combined)
+        except Exception as e:
+            logger.error("附加文件失败: %s", e)
+            self._view.show_error("附加错误", str(e))
+
+    def import_custom_data(self, path: str) -> None:
+        """自定义读取：弹出导入对话框，用户配置后加载"""
+        try:
+            raw_df = self._data_service.load_raw(path)
+        except Exception as e:
+            self._view.show_error("读取错误", str(e))
+            return
+
+        from ui.widgets.import_dialog import ImportDialog
+        parent = self._view if hasattr(self._view, 'winfo_toplevel') else None
+        dlg = ImportDialog(parent, raw_df, path)
+        if parent:
+            parent.wait_window(dlg)
+        else:
+            dlg.wait_window()
+
+        if dlg.result_df is not None:
+            self._apply_data(dlg.result_df,
+                             force_group_col=getattr(dlg, '_result_group_col', _MISSING))
+
+    def append_custom_data(self, path: str) -> None:
+        """自定义附加：弹导入对话框配置后，拼接到现有数据"""
+        if self._state.data is None:
+            self._view.show_error("错误", "请先加载主数据文件")
+            return
+        try:
+            raw_df = self._data_service.load_raw(path)
+        except Exception as e:
+            self._view.show_error("读取错误", str(e))
+            return
+
+        from ui.widgets.import_dialog import ImportDialog
+        parent = self._view if hasattr(self._view, 'winfo_toplevel') else None
+        dlg = ImportDialog(parent, raw_df, path)
+        if parent:
+            parent.wait_window(dlg)
+        else:
+            dlg.wait_window()
+
+        if dlg.result_df is not None:
+            # 列取并集，缺失填 NaN，纵向拼接
+            existing = self._state.data
+            all_cols = list(existing.columns) + [c for c in dlg.result_df.columns if c not in existing.columns]
+            combined = pd.concat(
+                [existing.reindex(columns=all_cols), dlg.result_df.reindex(columns=all_cols)],
+                ignore_index=True,
+            )
+            self._apply_data(combined,
+                             force_group_col=getattr(dlg, '_result_group_col', _MISSING))

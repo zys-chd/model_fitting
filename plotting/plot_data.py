@@ -35,6 +35,9 @@ class SeriesPlotData:
     selector_idx: int
     df_indices: Optional[np.ndarray] = None
     samples: Optional[np.ndarray] = None
+    # 独立控制散点与拟合曲线可见性
+    scatter_visible: bool = True
+    curve_visible: bool = True
 
 
 @dataclass

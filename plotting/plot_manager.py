@@ -66,24 +66,26 @@ class PlotManager:
         return fig
 
     def _draw_series(self, ax, series: SeriesPlotData):
-        """绘制单个数据系列：散点 + 拟合曲线"""
+        """绘制单个数据系列：散点 + 拟合曲线（分别受可见性控制）"""
         # 散点
-        ax.scatter(
-            series.xs, series.ys,
-            alpha=0.6, s=40,
-            color=series.color,
-            edgecolor="none",
-            picker=5,
-            marker=series.marker,
-        )
+        if series.scatter_visible:
+            ax.scatter(
+                series.xs, series.ys,
+                alpha=0.6, s=40,
+                color=series.color,
+                edgecolor="none",
+                picker=5,
+                marker=series.marker,
+            )
         # 拟合曲线
-        ax.plot(
-            series.fit_x, series.fit_y,
-            color=series.color,
-            linestyle=series.linestyle,
-            alpha=0.8,
-            linewidth=2,
-        )
+        if series.curve_visible:
+            ax.plot(
+                series.fit_x, series.fit_y,
+                color=series.color,
+                linestyle=series.linestyle,
+                alpha=0.8,
+                linewidth=2,
+            )
 
     def draw_limit_lines(self, ax, plot_spec: PlotSpec):
         """在图上绘制 limit 竖线"""
@@ -167,14 +169,20 @@ class PlotManager:
 
     @staticmethod
     def _build_legend(ax, plot_spec: PlotSpec):
-        """根据 PlotSpec 构建图例"""
+        """根据 PlotSpec 构建图例（区分散点/曲线可见性）"""
         from matplotlib.lines import Line2D
 
         handles = []
         col_done = set()
         for series in plot_spec.series_list:
+            # 列标题
             if series.col_name not in col_done:
                 col_done.add(series.col_name)
+                col_all_hidden = all(
+                    not s.scatter_visible and not s.curve_visible
+                    for s in plot_spec.series_list
+                    if s.col_name == series.col_name
+                )
                 handles.append(
                     Line2D(
                         [0], [0],
@@ -184,18 +192,23 @@ class PlotManager:
                         label=f"— {series.col_name} —",
                         markersize=8,
                         linewidth=2,
+                        alpha=0.15 if col_all_hidden else 1.0,
                     )
                 )
+            # 分组条目 — 曲线隐藏时不显示曲线样式
             gtxt = series.group or ""
+            ls_for_legend = series.linestyle if series.curve_visible else ""
+            group_hidden = not series.scatter_visible and not series.curve_visible
             handles.append(
                 Line2D(
                     [0], [0],
                     marker=series.marker,
                     color=series.color,
-                    linestyle=series.linestyle,
+                    linestyle=ls_for_legend,
                     label=f"  {gtxt}  R²={series.r_squared:.4f}",
                     markersize=6,
                     linewidth=2,
+                    alpha=0.15 if group_hidden else 1.0,
                 )
             )
         if handles:

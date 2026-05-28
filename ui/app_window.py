@@ -25,13 +25,21 @@ try:
                           SCALE_DISPLAY, SCALE_MAP, TRANSFORM_OPTIONS,
                           MODEL_DISPLAY, MODEL_KEY_MAP, FILTER_KEEP_SHIFT_ONLY_DEFAULT)
     from ..widgets import SeriesSelector
+    from ..widgets import MARKER_ICONS as _M_ICONS
+    from ..widgets import LINESTYLE_ICONS as _L_ICONS
     from ..presenter import FittingPresenter
 except ImportError:
     from config import (FONT_FAMILY, FONT_SIZE, MAX_SERIES, COLORS,
                         SCALE_DISPLAY, SCALE_MAP, TRANSFORM_OPTIONS,
                         MODEL_DISPLAY, MODEL_KEY_MAP, FILTER_KEEP_SHIFT_ONLY_DEFAULT)
     from widgets import SeriesSelector
+    from widgets import MARKER_ICONS as _M_ICONS
+    from widgets import LINESTYLE_ICONS as _L_ICONS
     from presenter import FittingPresenter
+
+# matplotlib 值 → 图标映射
+_MARKER_VAL_TO_ICON = dict(zip(['o','s','^','D','v','p','*','X','h','H','d','P','<','>'], _M_ICONS))
+_LINESTYLE_VAL_TO_ICON = dict(zip(['-','--',':','-.'], _L_ICONS))
 
 logger = logging.getLogger("model_fitting.ui")
 
@@ -142,6 +150,9 @@ class AppWindow(tk.Toplevel):
         # 交互状态
         self._active_selector_idx: int | None = None
         self._selected_points: list = []
+        self._highlight_artists: list = []
+        self._box_start = None
+        self._box_patch = None
         self._filter_shift_only = tk.BooleanVar(value=FILTER_KEEP_SHIFT_ONLY_DEFAULT)
 
         self._build_ui()
@@ -161,6 +172,82 @@ class AppWindow(tk.Toplevel):
             "linestyle": s.get_linestyle(),
             "limit": s.get_limit(),
         } for s in self.selectors]
+
+    def get_series_config(self) -> list:
+        """返回完整系列配置（供会话保存）"""
+        return [{
+            "col": s.get_selection(),
+            "marker": s.get_marker(),
+            "linestyle": s.get_linestyle(),
+            "limit": s.get_limit(),
+        } for s in self.selectors]
+
+    def restore_series_config(self, config: list) -> None:
+        """根据配置恢复系列选择器（供会话加载）"""
+        for s in self.selectors:
+            s.destroy()
+        self.selectors.clear()
+
+        columns = self._presenter._state.value_columns
+        for i, cfg in enumerate(config):
+            s = SeriesSelector(
+                self._selector_inner, columns, i,
+                remove_callback=self._on_remove_selector,
+                manual_remove_callback=self._on_manual_remove,
+                auto_remove_callback=self._on_auto_remove,
+                restore_callback=self._on_restore,
+                selection_change_callback=lambda sel: self._presenter.update_all(),
+                style_change_callback=lambda sel: self._presenter.update_all(),
+            )
+            # 恢复列选择
+            if cfg.get("col") and cfg["col"] in columns:
+                s.var.set(cfg["col"])
+            # 恢复 marker
+            mk = cfg.get("marker")
+            if mk and mk in _MARKER_VAL_TO_ICON:
+                s.marker_var.set(_MARKER_VAL_TO_ICON[mk])
+            # 恢复 linestyle
+            ls = cfg.get("linestyle")
+            if ls and ls in _LINESTYLE_VAL_TO_ICON:
+                s.ls_var.set(_LINESTYLE_VAL_TO_ICON[ls])
+            # 恢复 limit
+            limit = cfg.get("limit", 0.1)
+            s.limit_var.set(str(limit))
+            s.pack(fill=tk.X, pady=1)
+            self.selectors.append(s)
+
+    def sync_controls_from_state(self, state: dict) -> None:
+        """同步 View 控件与 Presenter 状态（供会话加载）"""
+        # 模型下拉
+        model_key = state.get("model_key", "Weibull")
+        from config import MODEL_KEY_MAP, MODEL_DISPLAY
+        display_name = {v: k for k, v in MODEL_KEY_MAP.items()}.get(model_key, MODEL_DISPLAY[0])
+        if "model" in self._tk_vars:
+            self._tk_vars["model"].set(display_name)
+
+        # 变换下拉
+        transform_key = state.get("transform_key", "cdf")
+        t_val = "CDF" if transform_key == "cdf" else "ln(-ln(1-CDF))"
+        if "transform" in self._tk_vars:
+            self._tk_vars["transform"].set(t_val)
+
+        # X/Y 轴
+        self._tk_vars.get("x_scale", tk.StringVar()).set(state.get("x_scale", "线性"))
+        self._tk_vars.get("y_scale", tk.StringVar()).set(state.get("y_scale", "线性"))
+
+        # 主题
+        self._tk_vars.get("theme", tk.StringVar()).set(state.get("theme", "default"))
+
+        # 范围
+        xl = state.get("x_limits", [None, None])
+        yl = state.get("y_limits", [None, None])
+        self._tk_vars.get("xlim_min", tk.StringVar()).set(str(xl[0]) if xl[0] is not None else "")
+        self._tk_vars.get("xlim_max", tk.StringVar()).set(str(xl[1]) if xl[1] is not None else "")
+        self._tk_vars.get("ylim_min", tk.StringVar()).set(str(yl[0]) if yl[0] is not None else "")
+        self._tk_vars.get("ylim_max", tk.StringVar()).set(str(yl[1]) if yl[1] is not None else "")
+
+        # shift 过滤
+        self._filter_shift_only.set(state.get("filter_shift_only", False))
 
     def get_model_selection(self) -> str:
         return self._tk_vars.get("model", tk.StringVar(value=MODEL_DISPLAY[0])).get()
@@ -231,7 +318,7 @@ class AppWindow(tk.Toplevel):
                 self._formula_fig.canvas.draw_idle()
 
     def display_stats(self, stats_tree_data: list) -> None:
-        """更新统计树"""
+        """更新统计树，含散点/曲线独立 checkbox"""
         t = self._stats_tree
         for item in t.get_children():
             t.delete(item)
@@ -240,12 +327,35 @@ class AppWindow(tk.Toplevel):
             return
 
         for item in stats_tree_data:
-            chk = "☑" if item.get("visible", True) else "☐"
             col = item["col"]
             grp = item.get("group", "All")
             gt = grp if grp != "All" else "(全部)"
-            col_node = t.insert("", tk.END, text=f"{chk} {col}", values=("",), open=True)
-            grp_node = t.insert(col_node, tk.END, text=f"{chk} {gt}", values=("",), open=True, tags=("group",))
+
+            # 散点/曲线可见性
+            scat_vis = item.get("scatter_visible", True)
+            curv_vis = item.get("curve_visible", True)
+            all_vis = scat_vis and curv_vis
+
+            # 列节点
+            col_chk = "☑" if all_vis else "☐"
+            col_node = t.insert("", tk.END, text=f"{col_chk} {col}", values=("",), open=True)
+
+            # 分组节点（点击切换整体）
+            grp_chk = "☑" if all_vis else "☐"
+            grp_node = t.insert(col_node, tk.END, text=f"{grp_chk} {gt}",
+                                values=("",), open=True, tags=("group",))
+
+            # 🆕 散点子节点
+            scat_chk = "☑" if scat_vis else "☐"
+            t.insert(grp_node, tk.END, text=f"{scat_chk} 散点",
+                     values=("",), tags=("scatter_toggle",))
+
+            # 🆕 曲线子节点
+            curv_chk = "☑" if curv_vis else "☐"
+            t.insert(grp_node, tk.END, text=f"{curv_chk} 拟合曲线",
+                     values=("",), tags=("curve_toggle",))
+
+            # 模型信息
             t.insert(grp_node, tk.END, text="模型", values=(item.get("model_name", ""),))
             t.insert(grp_node, tk.END, text="R²", values=(f"{item.get('r_squared', 0):.6f}",))
             for pn, pv in item.get("params", []):
@@ -253,6 +363,58 @@ class AppWindow(tk.Toplevel):
             for lbl, val in item.get("stats", {}).items():
                 t.insert(grp_node, tk.END, text=lbl,
                          values=(f"{val:.6g}" if isinstance(val, float) else str(val),))
+
+    def _on_stats_tree_click(self, event):
+        """点击统计树切换显示/隐藏"""
+        item = self._stats_tree.identify_row(event.y)
+        if not item:
+            return
+        text = self._stats_tree.item(item, "text")
+        tags = self._stats_tree.item(item, "tags")
+        parent = self._stats_tree.parent(item)
+        grandparent = self._stats_tree.parent(parent) if parent else None
+
+        # 散点/曲线子节点
+        if "scatter_toggle" in tags:
+            col, grp = self._resolve_col_group(item, parent, grandparent)
+            if col:
+                self._presenter.toggle_scatter_visibility(col, grp)
+            return
+        if "curve_toggle" in tags:
+            col, grp = self._resolve_col_group(item, parent, grandparent)
+            if col:
+                self._presenter.toggle_curve_visibility(col, grp)
+            return
+
+        # 分组节点（"group" tag）：切换整体系列
+        if "group" in tags:
+            col_text = self._stats_tree.item(parent, "text") if parent else ""
+            col = col_text[2:].strip() if col_text.startswith(("\u2611", "\u2610")) else col_text.strip()
+            grp = text[2:].strip() if text.startswith(("\u2611", "\u2610")) else text.strip()
+            if grp == "(全部)":
+                grp = "All"
+            if col:
+                self._presenter.toggle_visibility(col, grp)
+            return
+
+        # 列节点（无 parent）：切换整列
+        if not parent:
+            col = text[2:].strip() if text.startswith(("\u2611", "\u2610")) else text.strip()
+            if col:
+                self._presenter.toggle_column_visibility(col)
+
+    def _resolve_col_group(self, item, parent, grandparent):
+        """从 Treeview 节点解析 col / group 名称"""
+        grp_text = self._stats_tree.item(parent, "text")
+        grp = grp_text[2:].strip() if grp_text[:1] in ("☑", "☐") else grp_text.strip()
+        if grp == "(全部)":
+            grp = "All"
+        if grandparent:
+            col_text = self._stats_tree.item(grandparent, "text")
+            col = col_text[2:].strip() if col_text[:1] in ("☑", "☐") else col_text.strip()
+        else:
+            col = ""
+        return col, grp
 
     def update_mode_label(self, mode: str, text: str) -> None:
         if hasattr(self, '_mode_label'):
@@ -263,6 +425,18 @@ class AppWindow(tk.Toplevel):
 
     def show_error(self, title: str, message: str) -> None:
         messagebox.showerror(title, message, parent=self)
+
+    def show_fit_errors(self, errors: list) -> None:
+        """汇总显示拟合异常（一次弹窗）"""
+        if not errors:
+            return
+        deduped = list(dict.fromkeys(errors))  # 去重保序
+        max_show = 10
+        shown = deduped[:max_show]
+        msg = "\n".join(f"• {e}" for e in shown)
+        if len(deduped) > max_show:
+            msg += f"\n\n... 还有 {len(deduped) - max_show} 条异常"
+        messagebox.showwarning("拟合提醒", msg, parent=self)
 
     def show_info(self, title: str, message: str) -> None:
         messagebox.showinfo(title, message, parent=self)
@@ -308,7 +482,13 @@ class AppWindow(tk.Toplevel):
         # 文件
         fm = tk.Menu(menubar, tearoff=0, font=menu_font)
         fm.add_command(label="读取数据", command=self._on_load_data)
+        fm.add_command(label="读取数据（新窗口）", command=self._on_load_data_new_window)
+        fm.add_command(label="附加数据", command=self._on_append_data)
+        fm.add_command(label="自定义读取", command=self._on_custom_import)
         fm.add_command(label="生成测试数据", command=lambda: self._presenter.generate_test_data())
+        fm.add_separator()
+        fm.add_command(label="保存会话   Ctrl+S", command=self._on_save_session)
+        fm.add_command(label="加载会话   Ctrl+O", command=self._on_load_session)
         fm.add_separator()
         fm.add_command(label="导出模板", command=self._on_export_template)
         fm.add_separator()
@@ -361,6 +541,8 @@ class AppWindow(tk.Toplevel):
         menubar.add_cascade(label="关于", menu=am, font=menu_font)
 
         self.config(menu=menubar)
+        self.bind_all("<Control-s>", lambda e: self._on_save_session())
+        self.bind_all("<Control-o>", lambda e: self._on_load_session())
 
     def _build_top_bar(self):
         tf = ttk.Frame(self)
@@ -472,7 +654,8 @@ class AppWindow(tk.Toplevel):
 
         sf = ttk.LabelFrame(m, text="统计信息")
         sf.pack(side=tk.LEFT, fill=tk.BOTH, padx=4, pady=4, ipadx=2)
-        self._mode_label = ttk.Label(sf, text="", font=(FONT_FAMILY, 8), foreground="#555555", anchor=tk.W)
+        self._mode_label = ttk.Label(sf, text="● 普通模式 — 单击选点 / 右键框选 / 双击查看数据详情",
+                                      font=(FONT_FAMILY, 8), foreground="#555555", anchor=tk.W)
         self._mode_label.pack(fill=tk.X, padx=2, pady=(0, 2))
         tc = ttk.Frame(sf)
         tc.pack(fill=tk.BOTH, expand=True)
@@ -489,6 +672,7 @@ class AppWindow(tk.Toplevel):
         tc.grid_rowconfigure(0, weight=1)
         tc.grid_columnconfigure(0, weight=1)
         self._stats_tree.bind("<MouseWheel>", lambda e: self._stats_tree.yview_scroll(-1 if e.delta > 0 else 1, "units"))
+        self._stats_tree.bind("<Button-1>", self._on_stats_tree_click, add="+")
 
     # ==================== 选择器管理 ====================
 
@@ -530,6 +714,53 @@ class AppWindow(tk.Toplevel):
         if path:
             self._presenter.load_file(path)
 
+    def _on_load_data_new_window(self):
+        """在新窗口读取数据"""
+        path = filedialog.askopenfilename(
+            filetypes=[("数据文件", "*.csv *.xlsx *.xls"), ("所有文件", "*.*")], parent=self,
+        )
+        if path:
+            import pandas as pd
+            ext = os.path.splitext(path)[1].lower()
+            df = pd.read_csv(path) if ext == '.csv' else pd.read_excel(path)
+            AppWindow(parent=self, dataframe=df)
+
+    def _on_append_data(self):
+        """附加数据 — 通过自定义导入对话框配置后拼接"""
+        if self._presenter.get_dataframe() is None:
+            messagebox.showinfo("提示", "请先加载主数据文件", parent=self)
+            return
+        path = filedialog.askopenfilename(
+            filetypes=[("数据文件", "*.csv *.xlsx *.xls"), ("所有文件", "*.*")], parent=self,
+        )
+        if path:
+            self._presenter.append_custom_data(path)
+
+    def _on_custom_import(self):
+        """自定义数据读取"""
+        path = filedialog.askopenfilename(
+            filetypes=[("数据文件", "*.csv *.xlsx *.xls"), ("所有文件", "*.*")], parent=self,
+        )
+        if path:
+            self._presenter.import_custom_data(path)
+
+    def _on_save_session(self):
+        path = filedialog.asksaveasfilename(
+            defaultextension=".rda",
+            filetypes=[("会话文件", "*.rda"), ("所有文件", "*.*")],
+            parent=self,
+        )
+        if path:
+            self._presenter.save_session(path)
+
+    def _on_load_session(self):
+        path = filedialog.askopenfilename(
+            filetypes=[("会话文件", "*.rda"), ("所有文件", "*.*")],
+            parent=self,
+        )
+        if path:
+            self._presenter.load_session(path)
+
     def _on_model_change(self, display_name):
         key = MODEL_KEY_MAP.get(display_name, "Weibull")
         self._presenter.set_model(key)
@@ -546,11 +777,18 @@ class AppWindow(tk.Toplevel):
         self._presenter.set_filter_shift_only(self._filter_shift_only.get())
 
     def _on_manual_remove(self, sel: SeriesSelector):
+        col = sel.get_selection()
         self._active_selector_idx = sel.idx if self._active_selector_idx != sel.idx else None
-        self.update_mode_label(
-            "remove" if self._active_selector_idx is not None else "normal",
-            f"⚠ 手动去除模式" if self._active_selector_idx is not None else "● 普通模式",
-        )
+        if self._active_selector_idx is not None:
+            self.update_mode_label(
+                "remove",
+                f"⚠ 手动去除「{col}」— 单击选点 / 右键框选 / 双击确认去除 （再点「手动去除」退出）",
+            )
+        else:
+            self.update_mode_label(
+                "normal",
+                "● 普通模式 — 单击选点 / 右键框选 / 双击查看数据详情",
+            )
 
     def _on_auto_remove(self, sel: SeriesSelector):
         col = sel.get_selection()
@@ -604,22 +842,252 @@ class AppWindow(tk.Toplevel):
     # ==================== matplotlib 交互 ====================
 
     def _setup_matplotlib_interaction(self):
-        if not self._canvas:
+        if not self._canvas or not self._current_figure or not self._current_figure.axes:
             return
+
+        ax = self._current_figure.axes[0]
 
         def on_pick(event):
             if len(event.ind) == 0:
                 return
-            # 收集选中点信息
-            sel_points = []
-            for i in event.ind:
-                sel_points.append({
-                    "df_idx": i,
-                    "x_raw": float(event.artist.get_offsets()[i, 0]),
-                    "y_cdf": float(event.artist.get_offsets()[i, 1]),
-                })
+            sel = self._collect_picked_points(event)
+            if not sel:
+                return
+            if self._active_selector_idx is not None:
+                # 手动去除模式：累积选中
+                same = [s for s in self._selected_points if s["col"] == sel[0]["col"]]
+                ex = {s["point_idx"] for s in same}
+                new = [s for s in sel if s["point_idx"] not in ex]
+                self._selected_points = same + new
+                self._highlight_selected(ax, self._selected_points)
+            else:
+                self._highlight_selected(ax, sel)
+                self._selected_points = sel
+            self._canvas.draw_idle()
+
+        # 右键框选
+        def on_press(event):
+            if event.button == 3 and event.inaxes and event.xdata is not None and event.ydata is not None:
+                self._box_start = (event.xdata, event.ydata)
+
+        def on_motion(event):
+            if self._box_start and event.inaxes and event.xdata is not None and event.ydata is not None:
+                if self._box_patch:
+                    self._box_patch.remove()
+                x0, y0 = self._box_start
+                import matplotlib.patches as mpatches
+                self._box_patch = mpatches.Rectangle(
+                    (min(x0, event.xdata), min(y0, event.ydata)),
+                    abs(event.xdata - x0), abs(event.ydata - y0),
+                    fill=True, facecolor="blue", edgecolor="blue", alpha=0.2,
+                )
+                ax.add_patch(self._box_patch)
+                self._canvas.draw_idle()
+
+        def on_release(event):
+            if self._box_start:
+                if self._box_patch:
+                    self._box_patch.remove()
+                    self._box_patch = None
+                x0, y0 = self._box_start
+                x1, y1 = event.xdata, event.ydata
+                self._box_start = None
+                if x0 is None or y0 is None or x1 is None or y1 is None:
+                    return
+                xmin, xmax = sorted([x0, x1])
+                ymin, ymax = sorted([y0, y1])
+                sel = self._box_select_points(xmin, xmax, ymin, ymax)
+                if not sel:
+                    return
+                if self._active_selector_idx is not None:
+                    self._highlight_selected(ax, sel)
+                    self._canvas.draw_idle()
+                    self._confirm_remove(sel)
+                else:
+                    self._highlight_selected(ax, sel)
+                    self._selected_points = sel
+                    self._canvas.draw_idle()
+
+        # 双击
+        def on_dbl(event):
+            if self._selected_points:
+                if self._active_selector_idx is not None:
+                    self._confirm_remove(list(self._selected_points))
+                else:
+                    self._show_popup(self._selected_points)
 
         self._canvas.mpl_connect("pick_event", on_pick)
+        self._canvas.mpl_connect("button_press_event", on_press)
+        self._canvas.mpl_connect("motion_notify_event", on_motion)
+        self._canvas.mpl_connect("button_release_event", on_release)
+        self._canvas.get_tk_widget().bind("<Double-Button-1>", on_dbl)
+
+    def _collect_picked_points(self, event) -> list:
+        """从 pick_event 收集选中点信息，映射 scatter artist → series_meta"""
+        sel = []
+        meta_list = self._presenter.get_series_meta()
+        ax = self._current_figure.axes[0] if self._current_figure else None
+        if not ax:
+            return sel
+
+        # 找到 event.artist 对应哪个 collection index
+        try:
+            coll_idx = list(ax.collections).index(event.artist)
+        except ValueError:
+            return sel
+        if coll_idx >= len(meta_list):
+            return sel
+
+        m = meta_list[coll_idx]
+        # 检查可见性和 selector
+        if m["selector_idx"] != self._active_selector_idx and self._active_selector_idx is not None:
+            return sel
+
+        offsets = event.artist.get_offsets()
+        df_indices = m.get("df_indices", [])
+        for i in event.ind:
+            if i >= len(offsets):
+                continue
+            df_idx = df_indices[i] if i < len(df_indices) else i
+            sel.append({
+                "col": m["col"],
+                "group": m.get("group"),
+                "point_idx": int(i),
+                "x_raw": float(offsets[i, 0]),
+                "y_cdf": float(offsets[i, 1]),
+                "df_idx": df_idx,
+                "selector_idx": m["selector_idx"],
+            })
+        return sel
+
+    def _box_select_points(self, xmin, xmax, ymin, ymax) -> list:
+        """框选范围内的点"""
+        sel = []
+        meta_list = self._presenter.get_series_meta()
+        ax = self._current_figure.axes[0] if self._current_figure else None
+        if not ax:
+            return sel
+        for coll_idx, coll in enumerate(ax.collections):
+            if coll_idx >= len(meta_list):
+                continue
+            m = meta_list[coll_idx]
+            if self._active_selector_idx is not None and m["selector_idx"] != self._active_selector_idx:
+                continue
+            offsets = coll.get_offsets()
+            inside = (
+                (offsets[:, 0] >= xmin) & (offsets[:, 0] <= xmax) &
+                (offsets[:, 1] >= ymin) & (offsets[:, 1] <= ymax)
+            )
+            df_indices = m.get("df_indices", [])
+            for i in np.where(inside)[0]:
+                df_idx = df_indices[i] if i < len(df_indices) else i
+                sel.append({
+                    "col": m["col"],
+                    "group": m.get("group"),
+                    "point_idx": int(i),
+                    "x_raw": float(offsets[i, 0]),
+                    "y_cdf": float(offsets[i, 1]),
+                    "df_idx": df_idx,
+                    "selector_idx": m["selector_idx"],
+                })
+        return sel
+
+    def _highlight_selected(self, ax, sel: list):
+        """高亮选中的点"""
+        self._clear_selection()
+        if sel:
+            hl = ax.scatter(
+                [s["x_raw"] for s in sel],
+                [s["y_cdf"] for s in sel],
+                s=80, facecolor="none", edgecolor="red", linewidth=2, zorder=10,
+            )
+            self._highlight_artists.append(hl)
+
+    def _clear_selection(self):
+        for a in self._highlight_artists:
+            a.remove()
+        self._highlight_artists.clear()
+        self._selected_points.clear()
+        if self._canvas:
+            self._canvas.draw_idle()
+
+    def _show_popup(self, sel: list):
+        """弹窗显示选中数据点详情 — 按列→分组 Treeview，显示 PART_ID/group/值"""
+        df = self._presenter.get_dataframe()
+        if df is None:
+            return
+
+        top = tk.Toplevel(self)
+        top.title("数据点详情")
+
+        # 列宽自适应
+        cols = ("PART_ID", "值")
+        has_part_id = "PART_ID" in df.columns or "part_id" in df.columns
+        has_group = self._presenter._state.group_column is not None
+        if has_group:
+            cols = ("PART_ID", "分组", "值")
+
+        tv = ttk.Treeview(top, columns=cols, show="tree headings", height=min(30, len(sel)))
+        tv.heading("#0", text="列")
+        for c in cols:
+            tv.heading(c, text=c)
+        tv.column("#0", width=140, anchor="w")
+        tv.column("值", width=120, anchor="e")
+        if "PART_ID" in cols:
+            tv.column("PART_ID", width=100, anchor="w")
+        if "分组" in cols:
+            tv.column("分组", width=80, anchor="w")
+
+        # 按列→分组组织
+        by_col: dict = {}
+        for s in sel:
+            by_col.setdefault(s["col"], []).append(s)
+
+        for col_name, items in sorted(by_col.items()):
+            cn = tv.insert("", tk.END, text=col_name, values=("", "", "") if len(cols)==3 else ("", ""), open=True)
+            by_grp: dict = {}
+            for s in items:
+                r = df.iloc[s["df_idx"]] if s["df_idx"] < len(df) else None
+                pid = str(r.get("PART_ID", r.get("part_id", f"#{s['df_idx']}"))) if r is not None else f"#{s['df_idx']}"
+                g = str(r.get(self._presenter._state.group_column, "-")) if r is not None and has_group else "-"
+                val_str = f"{s['x_raw']:.6g}"
+                by_grp.setdefault(g, []).append((pid, val_str))
+            for g, pts in sorted(by_grp.items()):
+                gn = tv.insert(cn, tk.END, text=g, values=("", "", "") if len(cols)==3 else ("", ""), open=True)
+                for pid, val in pts:
+                    vals = (pid, g, val) if has_group else (pid, val)
+                    tv.insert(gn, tk.END, text="", values=vals)
+
+        sy = ttk.Scrollbar(top, orient=tk.VERTICAL, command=tv.yview)
+        tv.configure(yscrollcommand=sy.set)
+        tv.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sy.pack(side=tk.RIGHT, fill=tk.Y)
+        top.geometry(f"550x{max(240, 140 + min(30, len(sel)) * 22)}")
+
+    def _confirm_remove(self, sel: list):
+        """确认并执行去除选中的点 — 显示丰富上下文"""
+        df = self._presenter.get_dataframe()
+        if df is None:
+            return
+
+        has_group = self._presenter._state.group_column is not None
+        lines = [f"以下 {len(sel)} 个点将被去除：\n", "-" * 50 + "\n"]
+        for i, s in enumerate(sel[:30]):
+            pid = ""
+            grp_info = ""
+            if s["df_idx"] < len(df):
+                r = df.iloc[s["df_idx"]]
+                pid = str(r.get("PART_ID", r.get("part_id", "")))
+                if has_group:
+                    grp_info = f" [{r.get(self._presenter._state.group_column, '')}]"
+            lines.append(f"  #{i+1}: {s['col']}{grp_info}  PID={pid}  值={s['x_raw']:.6g}\n")
+        if len(sel) > 30:
+            lines.append(f"  ... 还有 {len(sel) - 30} 个\n")
+        if messagebox.askyesno("确认去除", "".join(lines), parent=self):
+            self._presenter.manual_remove_points(sel)
+            self._active_selector_idx = None
+            self._clear_selection()
+            self.update_mode_label("normal", "● 普通模式 — 单击选点 / 右键框选 / 双击查看数据详情")
 
     # ==================== 清理 ====================
 

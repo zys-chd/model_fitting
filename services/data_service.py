@@ -9,7 +9,7 @@ import logging
 from typing import Optional
 import pandas as pd
 
-from .file_handler_registry import FileFormatRegistry, FILE_HANDLERS
+from .file_handler_registry import FileFormatRegistry, FILE_HANDLERS, CSVHandler, ExcelHandler
 try:
     from ..utils import detect_columns, filter_columns_keep_shift_only, generate_test_data, default_test_path
 except ImportError:
@@ -93,3 +93,24 @@ class DataService:
     def get_default_test_path() -> str:
         """返回默认测试 CSV 路径"""
         return default_test_path()
+
+    def append_file(self, existing_df: pd.DataFrame, new_path: str) -> pd.DataFrame:
+        """加载新文件并纵向拼接到已有 DataFrame（列取并集，缺失填 NaN）"""
+        new_df = self.load_file(new_path)
+        all_cols = list(existing_df.columns) + [c for c in new_df.columns if c not in existing_df.columns]
+        existing_aligned = existing_df.reindex(columns=all_cols)
+        new_aligned = new_df.reindex(columns=all_cols)
+        combined = pd.concat([existing_aligned, new_aligned], ignore_index=True)
+        logger.info("附加数据: %d + %d = %d 行", len(existing_df), len(new_df), len(combined))
+        return combined
+
+    def load_raw(self, path: str, **kwargs) -> pd.DataFrame:
+        """原始加载（不做列检测/过滤，不自动推断表头），供自定义导入使用"""
+        handler = self._file_registry.find_handler(path)
+        if handler is None:
+            ext = os.path.splitext(path)[1]
+            raise ValueError(f"不支持的文件格式: {ext}")
+        # CSV/Excel: header=None 保留所有行为数据，由 ImportDialog 让用户指定表头行
+        if isinstance(handler, (CSVHandler, ExcelHandler)):
+            kwargs.setdefault("header", None)
+        return handler.read(path, **kwargs)

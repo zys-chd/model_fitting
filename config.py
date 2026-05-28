@@ -14,7 +14,7 @@ plt.rcParams['font.family'] = 'Microsoft YaHei'
 plt.rcParams['axes.unicode_minus'] = False
 
 # ============ 系列数量限制 ============
-MAX_SERIES = 4
+MAX_SERIES = 8
 
 # ============ 颜色方案 ============
 COLORS = plt.cm.tab10(np.linspace(0, 1, 10))
@@ -58,3 +58,6 @@ ID_CANDIDATES = ['PART_ID', 'part_id']
 COLUMN_SUFFIX_CANDIDATES = ['_T0', '_After', '_shift']
 # 默认关闭：需用户手动在界面中开启
 FILTER_KEEP_SHIFT_ONLY_DEFAULT = False
+
+# ============ 曲线显示默认值 ============
+SHOW_FIT_CURVE_DEFAULT = True  # 加载数据后默认是否显示拟合曲线；散点始终默认显示

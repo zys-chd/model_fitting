@@ -50,42 +50,13 @@ def detect_columns(df: pd.DataFrame) -> dict:
 
 def filter_columns_keep_shift_only(df_columns: list) -> list:
     """
-    对列名进行后缀过滤：若发现存在 _T0 / _After / _shift 结尾的列组，
-    则只保留 _shift 结尾的列，去除同基名的 _T0 和 _After 结尾的列。
+    仅保留以 _shift 结尾的列，去掉所有其他列。
 
     例如：['IDSS1_T0', 'IDSS1_After', 'IDSS1_shift', 'VTH1']
-       → ['IDSS1_shift', 'VTH1']
-
-    不影响不含这些后缀的列。
+       → ['IDSS1_shift']
     """
     columns = list(df_columns)
-    # 收集所有以候选后缀结尾的列，按基名分组
-    suffix_cols = {}  # base_name -> {suffix: full_col_name}
-    for col in columns:
-        for suffix in COLUMN_SUFFIX_CANDIDATES:
-            if col.endswith(suffix):
-                base = col[: -len(suffix)]
-                if base not in suffix_cols:
-                    suffix_cols[base] = {}
-                suffix_cols[base][suffix] = col
-                break
-
-    if not suffix_cols:
-        return columns
-
-    # 找出需要移除的列（_T0 和 _After 结尾的，且同基名存在 _shift）
-    to_remove = set()
-    for base, suffix_map in suffix_cols.items():
-        if "_shift" in suffix_map:
-            # 有 _shift 列，则移除同基名的 _T0 和 _After
-            for suffix in ["_T0", "_After"]:
-                if suffix in suffix_map:
-                    to_remove.add(suffix_map[suffix])
-
-    if not to_remove:
-        return columns
-
-    return [c for c in columns if c not in to_remove]
+    return [c for c in columns if c.endswith("_shift")]
 
 
 def generate_test_data(path: str = None) -> pd.DataFrame:
