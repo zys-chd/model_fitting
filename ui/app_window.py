@@ -130,7 +130,7 @@ class AppWindow(tk.Toplevel):
             super().__init__(self._tk_root)
         else:
             super().__init__(parent)
-        self.title("分布拟合工具")
+        self.title(f"分布拟合工具 v{_read_version()}")
         self.geometry("1650x900")
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
