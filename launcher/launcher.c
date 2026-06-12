@@ -138,38 +138,54 @@ static void show_status(const char *text) {
     RegisterClassW(&wc);
 
     int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN);
-    int ww = 440, wh = 150;
+    int ww = 440, wh = 170;
     _stat_wnd = CreateWindowExW(WS_EX_TOOLWINDOW, L"MFStatusWnd",
         wtitle ? wtitle : L"", WS_POPUP | WS_BORDER,
         (sw - ww)/2, (sh - wh)/2, ww, wh, NULL, NULL, wc.hInstance, NULL);
     free(wtitle);
 
-    /* 标题字体 14pt bold */
     _stat_font_title = CreateFontW(18, 0, 0, 0, FW_SEMIBOLD, 0, 0, 0,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         DEFAULT_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei");
 
-    /* 状态字体 20pt */
+    /* 主状态字体 20pt */
     _stat_font = CreateFontW(24, 0, 0, 0, FW_NORMAL, 0, 0, 0,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         DEFAULT_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei");
 
     /* 图标 — 🚀 */
     CreateWindowExW(0, L"STATIC", L"\U0001F680", WS_CHILD | WS_VISIBLE | SS_CENTER,
-        20, 38, 50, 50, _stat_wnd, (HMENU)99, wc.hInstance, NULL);
+        20, 30, 50, 50, _stat_wnd, (HMENU)99, wc.hInstance, NULL);
     SendMessageW(GetDlgItem(_stat_wnd, 99), WM_SETFONT, (WPARAM)_stat_font, TRUE);
 
-    /* 状态文字 */
+    /* 主状态文字 (ID 101) */
     CreateWindowExW(0, L"STATIC", wtext ? wtext : L"", WS_CHILD | WS_VISIBLE | SS_LEFT,
-        75, 42, ww - 95, 55, _stat_wnd, (HMENU)101, wc.hInstance, NULL);
+        75, 36, ww - 95, 50, _stat_wnd, (HMENU)101, wc.hInstance, NULL);
     SendMessageW(GetDlgItem(_stat_wnd, 101), WM_SETFONT, (WPARAM)_stat_font, TRUE);
     free(wtext);
+
+    /* 子状态字体 14pt, 灰色 (ID 102, 初始隐藏) */
+    HFONT sub_font = CreateFontW(16, 0, 0, 0, FW_NORMAL, 0, 0, 0,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        DEFAULT_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei");
+    CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT,
+        75, 80, ww - 95, 40, _stat_wnd, (HMENU)102, wc.hInstance, NULL);
+    SendMessageW(GetDlgItem(_stat_wnd, 102), WM_SETFONT, (WPARAM)sub_font, TRUE);
+    /* Note: sub_font 不释放, 跟随窗口生命周期 */
 
     /* 底部细线 */
     CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_ETCHEDHORZ,
         0, wh - 2, ww, 2, _stat_wnd, NULL, wc.hInstance, NULL);
 
     ShowWindow(_stat_wnd, SW_SHOW);
+    UpdateWindow(_stat_wnd);
+}
+
+/* 更新子状态文字（下载进度等） */
+static void show_sub_status(const char *text) {
+    if (!_stat_wnd) return;
+    WCHAR *w = utf8_to_w(text);
+    if (w) { SetWindowTextW(GetDlgItem(_stat_wnd, 102), w); free(w); }
     UpdateWindow(_stat_wnd);
 }
 
@@ -606,6 +622,60 @@ static int pip_install(const char *python, const char *packages) {
     return system(cmd);
 }
 
+/* 逐包安装（带下载进度） */
+static int pip_install_one(const char *python, const char *pkg, int cur, int total) {
+    char cmd[4096];
+    /* --progress-bar on 让 pip 输出下载进度 */
+    snprintf(cmd, sizeof(cmd),
+             "\"%s\" -m pip install --quiet --disable-pip-version-check "
+             "--progress-bar on %s", python, pkg);
+
+    { char prog[128]; snprintf(prog, sizeof(prog),
+        "正在安装 %s (%d/%d)...", pkg, cur, total);
+      show_status(prog); pump_messages(); }
+
+    FILE *fp = popen(cmd, "r");
+    if (!fp) return -1;
+
+    char line[512];
+    while (fgets(line, sizeof(line), fp)) {
+        /* 解析 pip 下载进度: "Downloading ... 1.2/15.3 MB" */
+        char *dl = strstr(line, "Downloading");
+        if (dl) {
+            /* 提取文件名和进度 */
+            char fname[128] = ""; char prog_str[64] = "";
+            /* 格式: "Downloading numpy-2.0.0-cp312-...whl (15.3 MB)" */
+            char *lp = strchr(dl + 11, '(');
+            char *slash = NULL;
+            if (lp) {
+                /* 看看有没有 "1.2/" 这种进度 */
+                slash = strchr(dl + 11, '/');
+                if (!slash || slash > lp) slash = NULL;
+            }
+            if (slash) {
+                /* 有 已下载/总大小: "1.2/15.3 MB" */
+                char sub[256]; snprintf(sub, sizeof(sub),
+                    "下载中... %.60s", dl + 11);
+                /* 截断到换行 */
+                char *nl = strchr(sub, '\r');
+                if (!nl) nl = strchr(sub, '\n');
+                if (nl) *nl = '\0';
+                show_sub_status(sub);
+            } else {
+                show_sub_status("下载中...");
+            }
+        }
+        /* 已安装缓存信息 */
+        if (strstr(line, "already satisfied") || strstr(line, "Requirement already")) {
+            show_sub_status("已缓存, 跳过下载");
+        }
+        pump_messages();
+    }
+    int ret = pclose(fp);
+    show_sub_status("");  /* 清除子状态 */
+    return ret == 0 ? 0 : -1;
+}
+
 /* 检查 Python 版本 */
 static int check_python_version(const char *python) {
     char code[256];
@@ -704,37 +774,40 @@ int main(int argc, char **argv) {
         }
 #endif
 
-        char missing[2048] = {0};
-        int missing_count = 0;
-        for (int i = 0; i < REQUIREMENTS_COUNT; i++) {
+        /* 收集缺失的包索引 */
+        int missing_idx[32], missing_count = 0;
+        for (int i = 0; i < REQUIREMENTS_COUNT && missing_count < 32; i++) {
 #ifdef _WIN32
             { char prog[128]; snprintf(prog, sizeof(prog),
                 "正在检查 %s (%d/%d)...", REQUIREMENTS[i].import_name, i+1, REQUIREMENTS_COUNT);
               show_status(prog); pump_messages(); }
 #endif
             if (check_package(python, REQUIREMENTS[i].import_name) != 0) {
-                if (missing_count > 0) strcat(missing, " ");
-                strcat(missing, REQUIREMENTS[i].pip_name);
-                missing_count++;
+                missing_idx[missing_count++] = i;
             }
         }
 
         if (missing_count > 0) {
-#ifdef _WIN32
-            show_status("正在安装依赖..."); pump_messages();
-#endif
-            if (pip_install(python, missing) != 0) {
+            int failed = 0;
+            for (int m = 0; m < missing_count; m++) {
+                int idx = missing_idx[m];
+                if (pip_install_one(python, REQUIREMENTS[idx].pip_name,
+                                    m + 1, missing_count) != 0) {
+                    failed = 1; break;
+                }
+            }
+            if (failed) {
                 char err[1024];
                 snprintf(err, sizeof(err),
                     "依赖安装失败。\n\n"
-                    "请手动运行以下命令后重试：\n"
-                    "  pip install %s", missing);
+                    "请检查网络连接后重试。");
 #ifdef _WIN32
                 hide_status();
 #endif
                 msgbox_error(PROJECT_NAME, err);
                 return 1;
             }
+            /* 验证 */
             int still_missing = 0;
             for (int i = 0; i < REQUIREMENTS_COUNT; i++) {
                 if (check_package(python, REQUIREMENTS[i].import_name) != 0)
