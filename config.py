@@ -19,6 +19,23 @@ MAX_SERIES = 8
 # ============ 颜色方案 ============
 COLORS = plt.cm.tab10(np.linspace(0, 1, 10))
 
+# ============ 颜色调色板 ============
+COLOR_PALETTES = {
+    "tab10": {"name": "Tab10 (默认)", "colors": plt.cm.tab10(np.linspace(0, 1, 10))},
+    "Set1":  {"name": "Set1 (鲜明)",  "colors": plt.cm.Set1(np.linspace(0, 1, 9))},
+    "Set2":  {"name": "Set2 (柔和)",  "colors": plt.cm.Set2(np.linspace(0, 1, 8))},
+    "Dark2": {"name": "Dark2 (深色)", "colors": plt.cm.Dark2(np.linspace(0, 1, 8))},
+    "Paired": {"name": "Paired (配对)", "colors": plt.cm.Paired(np.linspace(0, 1, 12))},
+    "Pastel1": {"name": "Pastel1 (粉彩)", "colors": plt.cm.Pastel1(np.linspace(0, 1, 9))},
+    "Set3": {"name": "Set3 (Set3)", "colors": plt.cm.Set3(np.linspace(0, 1, 12))},
+    "Accent": {"name": "Accent (强调)", "colors": plt.cm.Accent(np.linspace(0, 1, 8))},
+}
+COLOR_PALETTE_KEYS = list(COLOR_PALETTES.keys())
+
+# 循环用的默认 marker/linestyle 序列
+CYCLE_MARKERS = ['o', 's', '^', 'D', 'v', 'p', '*', 'X', 'h', '<', '>']
+CYCLE_LINESTYLES = ['-', '--', ':', '-.']
+
 # ============ 坐标轴缩放映射（显示名 -> matplotlib 内部名）============
 SCALE_DISPLAY = ['线性', '对数']
 SCALE_MAP = {'线性': 'linear', '对数': 'log'}

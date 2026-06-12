@@ -1,8 +1,10 @@
-"""
+"""\
 测试文件：演示 App 的多种启动方式
 - 作为子窗口嵌入
 - 通过 launch() 传入 DataFrame
 - 通过 launch() 传入 CSV 路径
+
+注意：现在全部使用新版 AppWindow（MVP 架构），旧版 model_fitting_app 已移除。
 """
 import tkinter as tk
 from tkinter import ttk
@@ -11,7 +13,8 @@ import os
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from model_fitting_app import Model_Fitting_App, launch
+from model_fitting.ui.app_window import AppWindow
+from run import launch
 
 
 class TestHost(tk.Tk):
@@ -22,7 +25,7 @@ class TestHost(tk.Tk):
         self.title("分布拟合工具 — 测试启动器")
         self.geometry("520x400")
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-        self._child_windows: list[Model_Fitting_App] = []
+        self._child_windows: list[AppWindow] = []
         self._build_ui()
 
     def _build_ui(self):
@@ -57,7 +60,7 @@ class TestHost(tk.Tk):
                   font=("Microsoft YaHei", 9), name="counter").pack()
 
     def _open_as_child(self):
-        app = Model_Fitting_App(parent=self)
+        app = AppWindow(parent=self)
         self._child_windows.append(app)
         app.protocol("WM_DELETE_WINDOW", lambda a=app: self._remove_child(a))
         self._update_counter()
@@ -68,10 +71,10 @@ class TestHost(tk.Tk):
             from tkinter import messagebox
             messagebox.showwarning("缺少文件", f"找不到 {csv_path}")
             return
-        app = Model_Fitting_App(parent=self)
+        app = AppWindow(parent=self)
         self._child_windows.append(app)
         app.protocol("WM_DELETE_WINDOW", lambda a=app: self._remove_child(a))
-        app.after(150, lambda: app.load_csv(csv_path))
+        app.after(150, lambda: app._presenter.load_file(csv_path))
         self._update_counter()
 
     def _open_with_df(self):
@@ -82,26 +85,25 @@ class TestHost(tk.Tk):
             messagebox.showwarning("缺少文件", f"找不到 {csv_path}")
             return
         df = pd.read_csv(csv_path)
-        app = Model_Fitting_App(parent=self, dataframe=df)
+        app = AppWindow(parent=self, dataframe=df)
         self._child_windows.append(app)
         app.protocol("WM_DELETE_WINDOW", lambda a=app: self._remove_child(a))
         self._update_counter()
 
     def _launch_csv(self):
-        """通过 launch() 独立启动，传入 CSV 路径（阻塞直到窗口关闭）"""
+        """通过 launch() 独立启动，传入 CSV 路径"""
         csv_path = os.path.join(os.path.dirname(__file__), "test_weibull.csv")
         launch(csv_path=csv_path)
 
     def _launch_df(self):
-        """通过 launch() 独立启动，传入 DataFrame（阻塞直到窗口关闭）"""
+        """通过 launch() 独立启动，传入 DataFrame"""
         csv_path = os.path.join(os.path.dirname(__file__), "test_weibull.csv")
         df = pd.read_csv(csv_path)
         launch(dataframe=df)
 
-    def _remove_child(self, app: Model_Fitting_App):
+    def _remove_child(self, app: AppWindow):
         if app in self._child_windows:
             self._child_windows.remove(app)
-        app._on_close()
         try:
             app.destroy()
         except Exception:

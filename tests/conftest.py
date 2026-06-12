@@ -3,7 +3,6 @@ import os
 import sys
 import numpy as np
 import pandas as pd
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -11,6 +10,9 @@ import pytest
 _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
+
+# 延迟导入：测试文件自身负责 import 所需模块
+# conftest 只提供纯数据 fixtures，不触发 tkinter 导入
 
 TEST_CSV = os.path.join(_project_root, "test_weibull.csv")
 

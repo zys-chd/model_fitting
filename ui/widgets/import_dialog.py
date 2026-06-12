@@ -171,11 +171,19 @@ class ImportDialog(tk.Toplevel):
                 data_start = skip_actual + 1
                 df = self._raw_df.iloc[data_start:].reset_index(drop=True)
                 col_names = []
+                seen_col_names = {}
                 for i in range(len(df.columns)):
                     if i < len(header_vals) and pd.notna(header_vals[i]):
-                        col_names.append(str(header_vals[i]))
+                        base = str(header_vals[i])
                     else:
-                        col_names.append(f"Col{i}")
+                        base = f"Col{i}"
+                    # 去重复列名
+                    if base in seen_col_names:
+                        seen_col_names[base] += 1
+                        col_names.append(f"{base}_{seen_col_names[base]}")
+                    else:
+                        seen_col_names[base] = 0
+                        col_names.append(base)
                 df.columns = col_names
         except Exception as e:
             self._info_label.config(text=f"解析失败: {e}")

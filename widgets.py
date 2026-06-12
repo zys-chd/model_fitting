@@ -41,7 +41,7 @@ _LINESTYLE_VALUES = [val for _, val in _LINESTYLE_MAP]
 
 
 class SeriesSelector(ttk.Frame):
-    """数值列选择组件 — 含列选择、手动去除离群点、自动去除、恢复按钮"""
+    """数值列选择组件 — 含列选择、操作按钮（样式配置移入配置对话框）"""
 
     def __init__(self, master, columns, idx,
                  remove_callback=None,
@@ -50,6 +50,7 @@ class SeriesSelector(ttk.Frame):
                  restore_callback=None,
                  selection_change_callback=None,
                  style_change_callback=None,
+                 config_callback=None,
                  *args, **kwargs):
         super().__init__(master, *args, **kwargs)
         self.idx = idx
@@ -60,9 +61,10 @@ class SeriesSelector(ttk.Frame):
         self.restore_callback = restore_callback
         self.selection_change_callback = selection_change_callback
         self.style_change_callback = style_change_callback
+        self.config_callback = config_callback
         self.var = tk.StringVar()
 
-        # 单行：测试项选择下拉 + 移除 + 手动去除 + 自动去除 + 恢复
+        # 单行：测试项选择下拉 + 操作按钮
         ttk.Label(self, text=f"测试项 {idx + 1}：",
                   font=(FONT_FAMILY, FONT_SIZE)).pack(side=tk.LEFT, padx=2)
 
@@ -92,21 +94,25 @@ class SeriesSelector(ttk.Frame):
         # ---- 分隔 ----
         ttk.Separator(self, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6, pady=2)
 
-        # marker 选择（图标不加标签）
+        # marker / linestyle 移入样式配置对话框，行内仅保留「配置」按钮
         self.marker_var = tk.StringVar(value=MARKER_ICONS[0])
-        self.marker_combo = ttk.Combobox(self, textvariable=self.marker_var,
-                                         values=MARKER_ICONS, state='readonly',
-                                         width=4, font=(FONT_FAMILY, FONT_SIZE + 2))
-        self.marker_combo.pack(side=tk.LEFT, padx=(0, 4))
-        self.marker_combo.bind('<<ComboboxSelected>>', self._on_style_change)
-
-        # linestyle 选择（图标不加标签）
         self.ls_var = tk.StringVar(value=LINESTYLE_ICONS[0])
-        self.ls_combo = ttk.Combobox(self, textvariable=self.ls_var,
-                                     values=LINESTYLE_ICONS, state='readonly',
-                                     width=8, font=(FONT_FAMILY, FONT_SIZE + 1))
-        self.ls_combo.pack(side=tk.LEFT)
-        self.ls_combo.bind('<<ComboboxSelected>>', self._on_style_change)
+        # 新增样式变量（由对话框管理）
+        self.scatter_alpha_var = tk.DoubleVar(value=1.0)
+        self.curve_alpha_var = tk.DoubleVar(value=1.0)
+        self.marker_size_var = tk.IntVar(value=6)
+        self.line_width_var = tk.IntVar(value=2)
+        # 循环与颜色
+        self.cycle_marker_var = tk.BooleanVar(value=True)
+        self.cycle_linestyle_var = tk.BooleanVar(value=True)
+        self.custom_color_var = tk.StringVar(value="")  # ""=自动, hex=固定颜色
+
+        # 配置按钮
+        self.config_btn = ttk.Button(
+            self, text="✎ 配置", width=6,
+            command=self._on_config,
+        )
+        self.config_btn.pack(side=tk.LEFT, padx=2)
 
     def _on_remove(self):
         if self.remove_callback:
@@ -139,6 +145,11 @@ class SeriesSelector(ttk.Frame):
     def _on_style_change(self, event=None):
         if self.style_change_callback:
             self.style_change_callback(self)
+
+    def _on_config(self):
+        """打开样式配置对话框"""
+        if self.config_callback:
+            self.config_callback(self)
 
     def _on_manual_remove(self):
         if self.manual_remove_callback:
@@ -178,3 +189,56 @@ class SeriesSelector(ttk.Frame):
             return _LINESTYLE_VALUES[idx]
         except ValueError:
             return None
+
+    def get_scatter_alpha(self):
+        return self.scatter_alpha_var.get()
+
+    def get_curve_alpha(self):
+        return self.curve_alpha_var.get()
+
+    def get_marker_size(self):
+        return self.marker_size_var.get()
+
+    def get_line_width(self):
+        return self.line_width_var.get()
+
+    def get_style_dict(self) -> dict:
+        """返回完整样式配置字典（供配置对话框读写）"""
+        return {
+            "marker": self.get_marker(),
+            "marker_icon": self.marker_var.get(),
+            "linestyle": self.get_linestyle(),
+            "ls_icon": self.ls_var.get(),
+            "limit": self.get_limit(),
+            "scatter_alpha": self.get_scatter_alpha(),
+            "curve_alpha": self.get_curve_alpha(),
+            "marker_size": self.get_marker_size(),
+            "line_width": self.get_line_width(),
+            "cycle_marker": self.cycle_marker_var.get(),
+            "cycle_linestyle": self.cycle_linestyle_var.get(),
+            "custom_color": self.custom_color_var.get(),
+        }
+
+    def apply_style_dict(self, cfg: dict) -> None:
+        """从配置字典写入样式（由配置对话框调用，不触发 style_change_callback）"""
+        if "marker_icon" in cfg:
+            self.marker_var.set(cfg["marker_icon"])
+        if "ls_icon" in cfg:
+            self.ls_var.set(cfg["ls_icon"])
+        if "limit" in cfg:
+            self.limit_var.set(str(cfg["limit"]))
+        if "scatter_alpha" in cfg:
+            self.scatter_alpha_var.set(cfg["scatter_alpha"])
+        if "curve_alpha" in cfg:
+            self.curve_alpha_var.set(cfg["curve_alpha"])
+        if "marker_size" in cfg:
+            self.marker_size_var.set(cfg["marker_size"])
+        if "line_width" in cfg:
+            self.line_width_var.set(cfg["line_width"])
+        if "cycle_marker" in cfg:
+            self.cycle_marker_var.set(cfg["cycle_marker"])
+        if "cycle_linestyle" in cfg:
+            self.cycle_linestyle_var.set(cfg["cycle_linestyle"])
+        if "custom_color" in cfg:
+            self.custom_color_var.set(cfg["custom_color"])
+        # 注意：不再调用 style_change_callback —— 由对话框统一触发

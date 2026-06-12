@@ -28,6 +28,8 @@ try:
     from ..widgets import MARKER_ICONS as _M_ICONS
     from ..widgets import LINESTYLE_ICONS as _L_ICONS
     from ..presenter import FittingPresenter
+    from .widgets.style_config_dialog import StyleConfigDialog
+    from .widgets.data_workbook import DataWorkbook
 except ImportError:
     from config import (FONT_FAMILY, FONT_SIZE, MAX_SERIES, COLORS,
                         SCALE_DISPLAY, SCALE_MAP, TRANSFORM_OPTIONS,
@@ -36,6 +38,17 @@ except ImportError:
     from widgets import MARKER_ICONS as _M_ICONS
     from widgets import LINESTYLE_ICONS as _L_ICONS
     from presenter import FittingPresenter
+    from .widgets.style_config_dialog import StyleConfigDialog
+    from .widgets.data_workbook import DataWorkbook
+except ImportError:
+    from config import (FONT_FAMILY, FONT_SIZE, MAX_SERIES, COLORS,
+                        SCALE_DISPLAY, SCALE_MAP, TRANSFORM_OPTIONS,
+                        MODEL_DISPLAY, MODEL_KEY_MAP, FILTER_KEEP_SHIFT_ONLY_DEFAULT)
+    from widgets import SeriesSelector
+    from widgets import MARKER_ICONS as _M_ICONS
+    from widgets import LINESTYLE_ICONS as _L_ICONS
+    from presenter import FittingPresenter
+    from ui.widgets.style_config_dialog import StyleConfigDialog
 
 # matplotlib 值 → 图标映射
 _MARKER_VAL_TO_ICON = dict(zip(['o','s','^','D','v','p','*','X','h','H','d','P','<','>'], _M_ICONS))
@@ -171,6 +184,13 @@ class AppWindow(tk.Toplevel):
             "marker": s.get_marker(),
             "linestyle": s.get_linestyle(),
             "limit": s.get_limit(),
+            "scatter_alpha": s.get_scatter_alpha(),
+            "curve_alpha": s.get_curve_alpha(),
+            "marker_size": s.get_marker_size(),
+            "line_width": s.get_line_width(),
+            "cycle_marker": s.cycle_marker_var.get(),
+            "cycle_linestyle": s.cycle_linestyle_var.get(),
+            "custom_color": s.custom_color_var.get(),
         } for s in self.selectors]
 
     def get_series_config(self) -> list:
@@ -180,6 +200,13 @@ class AppWindow(tk.Toplevel):
             "marker": s.get_marker(),
             "linestyle": s.get_linestyle(),
             "limit": s.get_limit(),
+            "scatter_alpha": s.get_scatter_alpha(),
+            "curve_alpha": s.get_curve_alpha(),
+            "marker_size": s.get_marker_size(),
+            "line_width": s.get_line_width(),
+            "cycle_marker": s.cycle_marker_var.get(),
+            "cycle_linestyle": s.cycle_linestyle_var.get(),
+            "custom_color": s.custom_color_var.get(),
         } for s in self.selectors]
 
     def restore_series_config(self, config: list) -> None:
@@ -198,21 +225,25 @@ class AppWindow(tk.Toplevel):
                 restore_callback=self._on_restore,
                 selection_change_callback=lambda sel: self._presenter.update_all(),
                 style_change_callback=lambda sel: self._presenter.update_all(),
+                config_callback=self._on_open_style_config,
             )
             # 恢复列选择
             if cfg.get("col") and cfg["col"] in columns:
                 s.var.set(cfg["col"])
-            # 恢复 marker
-            mk = cfg.get("marker")
-            if mk and mk in _MARKER_VAL_TO_ICON:
-                s.marker_var.set(_MARKER_VAL_TO_ICON[mk])
-            # 恢复 linestyle
-            ls = cfg.get("linestyle")
-            if ls and ls in _LINESTYLE_VAL_TO_ICON:
-                s.ls_var.set(_LINESTYLE_VAL_TO_ICON[ls])
-            # 恢复 limit
-            limit = cfg.get("limit", 0.1)
-            s.limit_var.set(str(limit))
+            # 恢复样式
+            style_dict = {
+                "marker_icon": _MARKER_VAL_TO_ICON.get(cfg.get("marker"), "●"),
+                "ls_icon": _LINESTYLE_VAL_TO_ICON.get(cfg.get("linestyle"), "────"),
+                "limit": cfg.get("limit", 0.1),
+                "scatter_alpha": cfg.get("scatter_alpha", 1.0),
+                "curve_alpha": cfg.get("curve_alpha", 1.0),
+                "marker_size": cfg.get("marker_size", 6),
+                "line_width": cfg.get("line_width", 2),
+                "cycle_marker": cfg.get("cycle_marker", True),
+                "cycle_linestyle": cfg.get("cycle_linestyle", True),
+                "custom_color": cfg.get("custom_color", ""),
+            }
+            s.apply_style_dict(style_dict)
             s.pack(fill=tk.X, pady=1)
             self.selectors.append(s)
 
@@ -318,7 +349,7 @@ class AppWindow(tk.Toplevel):
                 self._formula_fig.canvas.draw_idle()
 
     def display_stats(self, stats_tree_data: list) -> None:
-        """更新统计树，含散点/曲线独立 checkbox"""
+        """更新统计树，含散点/曲线独立 checkbox（按列分组）"""
         t = self._stats_tree
         for item in t.get_children():
             t.delete(item)
@@ -326,43 +357,49 @@ class AppWindow(tk.Toplevel):
             t.insert("", tk.END, text="无数据", values=("",))
             return
 
+        # 按列分组
+        by_col: dict = {}
         for item in stats_tree_data:
-            col = item["col"]
-            grp = item.get("group", "All")
-            gt = grp if grp != "All" else "(全部)"
+            by_col.setdefault(item["col"], []).append(item)
 
-            # 散点/曲线可见性
-            scat_vis = item.get("scatter_visible", True)
-            curv_vis = item.get("curve_visible", True)
-            all_vis = scat_vis and curv_vis
-
-            # 列节点
-            col_chk = "☑" if all_vis else "☐"
+        for col, items in sorted(by_col.items()):
+            # 计算列整体可见性
+            col_all_scat = all(it.get("scatter_visible", True) for it in items)
+            col_all_curv = all(it.get("curve_visible", True) for it in items)
+            col_all_vis = col_all_scat and col_all_curv
+            col_chk = "☑" if col_all_vis else "☐"
             col_node = t.insert("", tk.END, text=f"{col_chk} {col}", values=("",), open=True)
 
-            # 分组节点（点击切换整体）
-            grp_chk = "☑" if all_vis else "☐"
-            grp_node = t.insert(col_node, tk.END, text=f"{grp_chk} {gt}",
-                                values=("",), open=True, tags=("group",))
+            for item in items:
+                grp = item.get("group", "All")
+                gt = grp if grp != "All" else "(全部)"
+                scat_vis = item.get("scatter_visible", True)
+                curv_vis = item.get("curve_visible", True)
+                all_vis = scat_vis and curv_vis
 
-            # 🆕 散点子节点
-            scat_chk = "☑" if scat_vis else "☐"
-            t.insert(grp_node, tk.END, text=f"{scat_chk} 散点",
-                     values=("",), tags=("scatter_toggle",))
+                # 分组节点
+                grp_chk = "☑" if all_vis else "☐"
+                grp_node = t.insert(col_node, tk.END, text=f"{grp_chk} {gt}",
+                                    values=("",), open=True, tags=("group",))
 
-            # 🆕 曲线子节点
-            curv_chk = "☑" if curv_vis else "☐"
-            t.insert(grp_node, tk.END, text=f"{curv_chk} 拟合曲线",
-                     values=("",), tags=("curve_toggle",))
+                # 散点子节点
+                scat_chk = "☑" if scat_vis else "☐"
+                t.insert(grp_node, tk.END, text=f"{scat_chk} 散点",
+                         values=("",), tags=("scatter_toggle",))
 
-            # 模型信息
-            t.insert(grp_node, tk.END, text="模型", values=(item.get("model_name", ""),))
-            t.insert(grp_node, tk.END, text="R²", values=(f"{item.get('r_squared', 0):.6f}",))
-            for pn, pv in item.get("params", []):
-                t.insert(grp_node, tk.END, text=pn, values=(f"{pv:.6g}",))
-            for lbl, val in item.get("stats", {}).items():
-                t.insert(grp_node, tk.END, text=lbl,
-                         values=(f"{val:.6g}" if isinstance(val, float) else str(val),))
+                # 曲线子节点
+                curv_chk = "☑" if curv_vis else "☐"
+                t.insert(grp_node, tk.END, text=f"{curv_chk} 拟合曲线",
+                         values=("",), tags=("curve_toggle",))
+
+                # 模型信息
+                t.insert(grp_node, tk.END, text="模型", values=(item.get("model_name", ""),))
+                t.insert(grp_node, tk.END, text="R²", values=(f"{item.get('r_squared', 0):.6f}",))
+                for pn, pv in item.get("params", []):
+                    t.insert(grp_node, tk.END, text=pn, values=(f"{pv:.6g}",))
+                for lbl, val in item.get("stats", {}).items():
+                    t.insert(grp_node, tk.END, text=lbl,
+                             values=(f"{val:.6g}" if isinstance(val, float) else str(val),))
 
     def _on_stats_tree_click(self, event):
         """点击统计树切换显示/隐藏"""
@@ -497,6 +534,8 @@ class AppWindow(tk.Toplevel):
 
         # 数据
         dm = tk.Menu(menubar, tearoff=0, font=menu_font)
+        dm.add_command(label="数据工作簿", command=self._on_open_workbook)
+        dm.add_separator()
         dm.add_command(label="添加列", command=self.add_selector)
         dm.add_command(label="移除列", command=self.remove_last)
         dm.add_separator()
@@ -533,10 +572,21 @@ class AppWindow(tk.Toplevel):
             th_sub.add_radiobutton(label=t, variable=self._tk_vars["theme"], value=t,
                                    command=lambda v=t: self._presenter.set_theme(v))
         pm.add_cascade(label="主题切换", menu=th_sub)
+        pm.add_separator()
+        pm.add_command(label="取消选中", command=self._clear_selection)
+        pm.add_command(label="绘制 limit 线", command=self._draw_limit_lines)
         menubar.add_cascade(label="绘图", menu=pm, font=menu_font)
 
         # 关于
         am = tk.Menu(menubar, tearoff=0, font=menu_font)
+        am.add_command(label="分布拟合工具", command=None)
+        am.add_separator()
+        am.add_command(label="支持模型（点击查看详情）：")
+        for md in MODEL_DISPLAY:
+            am.add_command(
+                label=f"  {md}", command=lambda m=md: self._show_model_info(m),
+            )
+        am.add_separator()
         am.add_command(label=f"版本: {_read_version()}")
         menubar.add_cascade(label="关于", menu=am, font=menu_font)
 
@@ -566,10 +616,13 @@ class AppWindow(tk.Toplevel):
 
     def _build_control_panel(self, c):
         r = 0
-        ttk.Button(c, text="添加列", command=self.add_selector).grid(row=r, column=0, sticky="w", padx=1)
-        ttk.Button(c, text="移除列", command=self.remove_last).grid(row=r, column=1, sticky="w", padx=1)
+        ttk.Button(c, text="数据工作簿", command=self._on_open_workbook).grid(
+            row=r, column=0, columnspan=2, sticky="ew", padx=1)
         ttk.Button(c, text="导出图", command=self._on_export_image).grid(row=r, column=2, sticky="w", padx=1)
         ttk.Button(c, text="导出参数", command=self._on_export_parameters).grid(row=r, column=3, sticky="w", padx=1)
+        r += 1
+        ttk.Button(c, text="添加列", command=self.add_selector).grid(row=r, column=0, sticky="w", padx=1)
+        ttk.Button(c, text="移除列", command=self.remove_last).grid(row=r, column=1, sticky="w", padx=1)
         r += 1
 
         ttk.Checkbutton(c, text="仅保留 _shift 列", variable=self._filter_shift_only,
@@ -641,7 +694,13 @@ class AppWindow(tk.Toplevel):
         r += 1
 
         ttk.Button(pc, text="应用范围", command=self._on_apply_limits).grid(
-            row=r, column=0, columnspan=6, sticky="ew", pady=2)
+            row=r, column=0, columnspan=3, sticky="ew", pady=2)
+
+        r += 1
+        ttk.Button(pc, text="取消选中", command=self._clear_selection).grid(
+            row=r, column=0, columnspan=3, sticky="ew", pady=2)
+        ttk.Button(pc, text="绘制 limit 线", command=self._draw_limit_lines).grid(
+            row=r, column=3, columnspan=3, sticky="ew", pady=2)
 
     def _build_middle_area(self):
         m = ttk.Frame(self)
@@ -689,6 +748,7 @@ class AppWindow(tk.Toplevel):
             restore_callback=self._on_restore,
             selection_change_callback=lambda sel: self._presenter.update_all(),
             style_change_callback=lambda sel: self._presenter.update_all(),
+            config_callback=self._on_open_style_config,
         )
         s.pack(fill=tk.X, pady=1)
         self.selectors.append(s)
@@ -712,7 +772,14 @@ class AppWindow(tk.Toplevel):
             filetypes=[("数据文件", "*.csv *.xlsx *.xls"), ("所有文件", "*.*")], parent=self,
         )
         if path:
-            self._presenter.load_file(path)
+            ext = os.path.splitext(path)[1].lower()
+            if ext in (".xlsx", ".xls"):
+                df = self._pick_excel_sheet(path)
+                if df is None:
+                    return
+                self._presenter.load_dataframe(df)
+            else:
+                self._presenter.load_file(path)
 
     def _on_load_data_new_window(self):
         """在新窗口读取数据"""
@@ -720,10 +787,16 @@ class AppWindow(tk.Toplevel):
             filetypes=[("数据文件", "*.csv *.xlsx *.xls"), ("所有文件", "*.*")], parent=self,
         )
         if path:
-            import pandas as pd
             ext = os.path.splitext(path)[1].lower()
-            df = pd.read_csv(path) if ext == '.csv' else pd.read_excel(path)
-            AppWindow(parent=self, dataframe=df)
+            if ext in (".xlsx", ".xls"):
+                df = self._pick_excel_sheet(path)
+                if df is None:
+                    return
+                AppWindow(parent=self, dataframe=df)
+            else:
+                import pandas as pd
+                df = pd.read_csv(path)
+                AppWindow(parent=self, dataframe=df)
 
     def _on_append_data(self):
         """附加数据 — 通过自定义导入对话框配置后拼接"""
@@ -835,9 +908,46 @@ class AppWindow(tk.Toplevel):
                 "IDSS1": [1.2, 1.5, 1.3, 1.8, 1.6, 2.1, 2.4, 1.9, 2.2, 2.6],
             })
             template.to_csv(path, index=False)
-            messagebox.showinfo("导出模板", f"模板已保存至：\n{path}", parent=self)
+            messagebox.showinfo("导出模板", f"模板已保存至：\\n{path}", parent=self)
         except Exception as e:
             messagebox.showerror("导出错误", str(e), parent=self)
+
+    # ==================== 样式配置对话框 ====================
+
+    def _on_open_workbook(self):
+        """打开数据工作簿"""
+        df = self._presenter.get_dataframe()
+        if df is None:
+            messagebox.showinfo("提示", "请先加载数据", parent=self)
+            return
+        dlg = DataWorkbook(
+            self, df,
+            group_column=self._presenter._state.group_column,
+            title=f"数据工作簿 — {self.title()}",
+        )
+        self._data_workbook = dlg
+
+    def _on_open_style_config(self, selector=None):
+        """打开样式配置对话框"""
+        if not self.selectors:
+            return
+        initial_idx = selector.idx if selector is not None and selector in self.selectors else 0
+
+        def _on_apply(full_redraw: bool, palette: str = None):
+            """应用回调：full_redraw=True 用 update_all，否则用轻量更新"""
+            if palette:
+                self._presenter._state.color_palette = palette
+            if full_redraw:
+                self._presenter.update_all()
+            else:
+                self._presenter.apply_series_styles()
+
+        dlg = StyleConfigDialog(
+            self, self.selectors, initial_idx=initial_idx,
+            palette=self._presenter._state.color_palette,
+            on_apply=_on_apply,
+        )
+        self._style_config_dialog = dlg
 
     # ==================== matplotlib 交互 ====================
 
@@ -1047,7 +1157,7 @@ class AppWindow(tk.Toplevel):
             cn = tv.insert("", tk.END, text=col_name, values=("", "", "") if len(cols)==3 else ("", ""), open=True)
             by_grp: dict = {}
             for s in items:
-                r = df.iloc[s["df_idx"]] if s["df_idx"] < len(df) else None
+                r = df.loc[s["df_idx"]] if s["df_idx"] in df.index else None
                 pid = str(r.get("PART_ID", r.get("part_id", f"#{s['df_idx']}"))) if r is not None else f"#{s['df_idx']}"
                 g = str(r.get(self._presenter._state.group_column, "-")) if r is not None and has_group else "-"
                 val_str = f"{s['x_raw']:.6g}"
@@ -1075,8 +1185,8 @@ class AppWindow(tk.Toplevel):
         for i, s in enumerate(sel[:30]):
             pid = ""
             grp_info = ""
-            if s["df_idx"] < len(df):
-                r = df.iloc[s["df_idx"]]
+            if s["df_idx"] in df.index:
+                r = df.loc[s["df_idx"]]
                 pid = str(r.get("PART_ID", r.get("part_id", "")))
                 if has_group:
                     grp_info = f" [{r.get(self._presenter._state.group_column, '')}]"
@@ -1088,6 +1198,114 @@ class AppWindow(tk.Toplevel):
             self._active_selector_idx = None
             self._clear_selection()
             self.update_mode_label("normal", "● 普通模式 — 单击选点 / 右键框选 / 双击查看数据详情")
+
+    # ==================== 模型分析工具（补齐旧版功能） ====================
+
+    def _pick_excel_sheet(self, path):
+        """弹窗让用户选择 Excel 的 sheet，返回 DataFrame 或 None"""
+        try:
+            xl = pd.ExcelFile(path)
+        except Exception as e:
+            messagebox.showerror("读取失败", f"无法打开 Excel 文件：\n{e}", parent=self)
+            return None
+        sheets = xl.sheet_names
+        if len(sheets) == 1:
+            return pd.read_excel(path, sheet_name=sheets[0])
+        dlg = tk.Toplevel(self)
+        dlg.title("选择工作表")
+        dlg.geometry("320x300")
+        dlg.transient(self)
+        dlg.grab_set()
+        dlg.resizable(False, False)
+        result = {"sheet": None}
+        ttk.Label(dlg, text=f"文件包含 {len(sheets)} 个工作表，请选择：",
+                  font=("Microsoft YaHei", 10)).pack(padx=15, pady=(15, 5))
+        lb = tk.Listbox(dlg, font=("Microsoft YaHei", 10), selectmode=tk.SINGLE, height=6)
+        for s in sheets:
+            lb.insert(tk.END, s)
+        lb.selection_set(0)
+        lb.pack(padx=15, pady=5, fill=tk.BOTH, expand=True)
+        def on_ok():
+            sel = lb.curselection()
+            if sel:
+                result["sheet"] = sheets[sel[0]]
+            dlg.destroy()
+        btn = ttk.Frame(dlg)
+        btn.pack(pady=(5, 10))
+        ttk.Button(btn, text="确认", command=on_ok).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn, text="取消", command=dlg.destroy).pack(side=tk.LEFT, padx=5)
+        self.wait_window(dlg)
+        if result["sheet"]:
+            return pd.read_excel(path, sheet_name=result["sheet"])
+        return None
+
+    def _show_model_info(self, display_name):
+        """弹窗显示模型公式和介绍"""
+        key = MODEL_KEY_MAP.get(display_name)
+        if not key:
+            return
+        from ..models import MODEL_INSTANCES
+        model = MODEL_INSTANCES.get(key)
+        if not model:
+            return
+        formula = model.get_formula()
+        desc = model.get_description()
+
+        top = tk.Toplevel(self)
+        top.title(display_name)
+        top.geometry("520x420")
+        top.resizable(False, False)
+
+        # 公式图
+        fig = Figure(figsize=(5, 0.7), dpi=100)
+        fig.set_facecolor("#f5f5f5")
+        fax = fig.add_subplot(111)
+        fax.axis("off")
+        fax.text(0.5, 0.5, f"${formula}$",
+                 transform=fax.transAxes, fontsize=14, ha="center", va="center")
+        canvas = FigureCanvasTkAgg(fig, master=top)
+        canvas.get_tk_widget().pack(fill=tk.X, padx=10, pady=(10, 5))
+        canvas.draw()
+
+        ttk.Separator(top, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=10, pady=5)
+
+        text = tk.Text(top, wrap=tk.WORD, font=("Microsoft YaHei", 10),
+                       padx=10, pady=5, relief=tk.FLAT, bg="#f5f5f5")
+        text.insert(tk.END, desc)
+        text.config(state=tk.DISABLED)
+        scroll = ttk.Scrollbar(top, orient=tk.VERTICAL, command=text.yview)
+        text.configure(yscrollcommand=scroll.set)
+        text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(10, 0), pady=(0, 10))
+        scroll.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 10), pady=(0, 10))
+
+    def _draw_limit_lines(self):
+        """重新绘图并绘制 limit 竖线"""
+        self._log.info("绘制 limit 线")
+        self._presenter.update_all()
+        if not self._current_figure or not self._current_figure.axes:
+            self._log.debug("绘制 limit 线: 无数据，跳过")
+            return
+        ax = self._current_figure.axes[0]
+        seen = set()
+        for meta in self._presenter.get_series_meta():
+            col = meta.get("col", "")
+            si = meta.get("selector_idx", -1)
+            if si in seen:
+                continue
+            seen.add(si)
+            if si >= len(self.selectors):
+                continue
+            try:
+                limit = self.selectors[si].get_limit()
+            except Exception:
+                continue
+            color = meta.get("color", "blue")
+            ax.axvline(x=limit, color=color, linestyle=":", alpha=0.7, linewidth=1.5)
+            ax.text(limit, 0.02, f"{col}={limit:.3g}", color=color,
+                    fontsize=7, rotation=90, va="bottom", ha="right",
+                    transform=ax.get_xaxis_transform())
+        if self._canvas:
+            self._canvas.draw_idle()
 
     # ==================== 清理 ====================
 

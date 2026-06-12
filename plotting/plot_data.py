@@ -38,6 +38,18 @@ class SeriesPlotData:
     # 独立控制散点与拟合曲线可见性
     scatter_visible: bool = True
     curve_visible: bool = True
+    # 透明度（默认完全不透明，后续可通过配置界面调整）
+    scatter_alpha: float = 1.0
+    curve_alpha: float = 1.0
+    # 符号大小（scatter s = marker_size²，legend markersize = marker_size）
+    marker_size: int = 6
+    # 拟合曲线线宽
+    line_width: int = 2
+    # 分组索引（用于循环解析，在 update_all 中填充）
+    group_index: int = 0
+    # matplotlib artist 引用（绘图时填充，用于无重建可见性更新）
+    scatter_artist: Any = None
+    line_artist: Any = None
 
 
 @dataclass

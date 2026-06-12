@@ -31,6 +31,24 @@ def detect_columns(df: pd.DataFrame) -> dict:
             group_column = gc
             break
 
+    # 若精确匹配未找到，用启发式检测：非数值列且唯一值较少 → 分组列
+    if group_column is None:
+        n = len(df)
+        for c in columns:
+            if c in ID_CANDIDATES:
+                continue
+            try:
+                # 尝试转为数值，失败说明是非数值列
+                pd.to_numeric(df[c], errors='raise')
+                is_numeric = True
+            except (ValueError, TypeError):
+                is_numeric = False
+            if not is_numeric:
+                unique_ratio = df[c].nunique() / n if n > 0 else 1
+                if unique_ratio < 0.5:  # 唯一值数量 < 总行数的 50%
+                    group_column = c
+                    break
+
     # 检测 ID 列
     id_columns = [c for c in columns if c in ID_CANDIDATES]
 

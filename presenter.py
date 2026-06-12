@@ -19,6 +19,7 @@ from services.file_handler_registry import FileFormatRegistry
 from plotting.plot_data import PlotSpec, SeriesPlotData, FitResult as PlotFitResult
 from plotting.plot_manager import PlotManager
 from config import SHOW_FIT_CURVE_DEFAULT
+from config import COLOR_PALETTES, CYCLE_MARKERS, CYCLE_LINESTYLES
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,7 @@ class AppState:
         self.series_meta: list = []  # [{selector_idx, col, group, df_indices, ...}]
         self.visibility: dict = {}  # {(col, group): {"scatter": bool, "curve": bool}}
         self.removed_points: dict = {}  # {col: [df_index, ...]} 显式跟踪去除点
+        self.color_palette: str = "tab10"
 
 
 class FittingPresenter:
@@ -74,6 +76,7 @@ class FittingPresenter:
         self._plot_manager = plot_manager or PlotManager()
         self._export_service = export_service or ExportService()
         self._state = AppState()
+        self._series_plot_data_list: list = []  # 保存最新 series plot data，供无重建可见性更新使用
 
     # ==================== 数据加载 ====================
 
@@ -173,11 +176,11 @@ class FittingPresenter:
 
     def set_x_scale(self, scale: str) -> None:
         self._state.x_scale = scale
-        self.update_all()
+        self._apply_scale_limits()
 
     def set_y_scale(self, scale: str) -> None:
         self._state.y_scale = scale
-        self.update_all()
+        self._apply_scale_limits()
 
     def set_theme(self, theme: str) -> None:
         self._state.theme = theme
@@ -187,7 +190,7 @@ class FittingPresenter:
     def set_axis_limits(self, x_limits: tuple, y_limits: tuple) -> None:
         self._state.x_limits = x_limits
         self._state.y_limits = y_limits
-        self.update_all()
+        self._apply_scale_limits()
 
     def set_filter_shift_only(self, enabled: bool) -> None:
         self._state.filter_shift_only = enabled
@@ -217,8 +220,10 @@ class FittingPresenter:
         transform = self._fitting_service.get_transform(self._state.current_transform_key)
 
         # 4. 拟合 + 统计
-        import matplotlib.pyplot as plt
-        gcolors = {g: plt.cm.tab10(i % 10) for i, g in enumerate(groups)}
+        # 获取调色板颜色
+        pal_entry = COLOR_PALETTES.get(self._state.color_palette, COLOR_PALETTES["tab10"])
+        pal_colors = pal_entry["colors"]
+        gcolors = {g: pal_colors[i % len(pal_colors)] for i, g in enumerate(groups)}
 
         all_fit_results = {}  # {(col, group): (model_name, params, r2, xs, cdf)}
         all_stats = {}
@@ -236,10 +241,17 @@ class FittingPresenter:
             marker = style.get("marker", "o")
             linestyle = style.get("linestyle", "-")
             limit = style.get("limit", 0)
+            scatter_alpha = style.get("scatter_alpha", 1.0)
+            curve_alpha = style.get("curve_alpha", 1.0)
+            marker_size = style.get("marker_size", 6)
+            line_width = style.get("line_width", 2)
+            cycle_marker = style.get("cycle_marker", True)
+            cycle_linestyle = style.get("cycle_linestyle", True)
+            custom_color = style.get("custom_color", "")
 
             if self._state.group_column:
                 col_has_data = False
-                for g in groups:
+                for gi, g in enumerate(groups):
                     sub = self._state.data.loc[
                         self._state.data[self._state.group_column] == g, col_name
                     ].dropna()
@@ -277,6 +289,22 @@ class FittingPresenter:
                     fit_y_raw = model.cdf(fit_x, fit_result.params)
                     fit_y = transform.transform(fit_y_raw)
 
+                    # 循环解析 + 自定义多色
+                    gm = CYCLE_MARKERS[gi % len(CYCLE_MARKERS)] if cycle_marker else marker
+                    gls = CYCLE_LINESTYLES[gi % len(CYCLE_LINESTYLES)] if cycle_linestyle else linestyle
+                    # 自定义颜色：支持 pipe 分隔的多色、单 hex、或调色板 key
+                    if custom_color:
+                        if "|" in custom_color:
+                            cols = [c.strip() for c in custom_color.split("|") if c.strip()]
+                            gcolor = cols[gi % len(cols)] if cols else gcolors[g]
+                        elif custom_color.startswith("#"):
+                            gcolor = custom_color
+                        else:
+                            cust_pal = COLOR_PALETTES.get(custom_color)
+                            gcolor = cust_pal["colors"][0] if cust_pal else gcolors[g]
+                    else:
+                        gcolor = gcolors[g]
+
                     vis_entry = self._state.visibility.get(key, {
                         "scatter": True,
                         "curve": SHOW_FIT_CURVE_DEFAULT,
@@ -284,9 +312,9 @@ class FittingPresenter:
                     spd = SeriesPlotData(
                         col_name=col_name,
                         group=g,
-                        marker=marker,
-                        linestyle=linestyle,
-                        color=gcolors[g],
+                        marker=gm,
+                        linestyle=gls,
+                        color=gcolor,
                         xs=fit_result.xs,
                         ys=fit_result.y_transformed,
                         fit_x=fit_x,
@@ -296,12 +324,17 @@ class FittingPresenter:
                         samples=sub.values,
                         scatter_visible=vis_entry.get("scatter", True),
                         curve_visible=vis_entry.get("curve", SHOW_FIT_CURVE_DEFAULT),
+                        scatter_alpha=scatter_alpha,
+                        curve_alpha=curve_alpha,
+                        marker_size=marker_size,
+                        line_width=line_width,
+                        group_index=gi,
                     )
                     series_plot_data_list.append(spd)
 
                     self._state.series_meta.append({
                         "col": col_name, "group": g, "selector_idx": si,
-                        "color": gcolors[g], "marker": marker, "linestyle": linestyle,
+                        "color": gcolor, "marker": gm, "linestyle": gls,
                         "df_indices": sub.index.values,
                     })
                 if not col_has_data:
@@ -342,12 +375,21 @@ class FittingPresenter:
                     "scatter": True,
                     "curve": SHOW_FIT_CURVE_DEFAULT,
                 })
+                gcolor = custom_color if custom_color else gcolors.get("All", "blue")
+                # 如果 custom_color 是 pipe 分隔的多色或 hex，解析为颜色值
+                if custom_color:
+                    if "|" in custom_color:
+                        cols = [c.strip() for c in custom_color.split("|") if c.strip()]
+                        gcolor = cols[0] if cols else gcolors.get("All", "blue")
+                    elif not custom_color.startswith("#"):
+                        cust_pal = COLOR_PALETTES.get(custom_color)
+                        gcolor = cust_pal["colors"][0] if cust_pal else gcolors.get("All", "blue")
                 spd = SeriesPlotData(
                     col_name=col_name,
                     group=None,
                     marker=marker,
                     linestyle=linestyle,
-                    color=gcolors.get("All", "blue"),
+                    color=gcolor,
                     xs=fit_result.xs,
                     ys=fit_result.y_transformed,
                     fit_x=fit_x,
@@ -357,12 +399,16 @@ class FittingPresenter:
                     samples=sub.values,
                     scatter_visible=vis_entry.get("scatter", True),
                     curve_visible=vis_entry.get("curve", SHOW_FIT_CURVE_DEFAULT),
+                    scatter_alpha=scatter_alpha,
+                    curve_alpha=curve_alpha,
+                    marker_size=marker_size,
+                    line_width=line_width,
                 )
                 series_plot_data_list.append(spd)
 
                 self._state.series_meta.append({
                     "col": col_name, "group": "All", "selector_idx": si,
-                    "color": gcolors.get("All", "blue"), "marker": marker, "linestyle": linestyle,
+                    "color": gcolor, "marker": marker, "linestyle": linestyle,
                     "df_indices": sub.index.values,
                 })
 
@@ -388,6 +434,7 @@ class FittingPresenter:
         )
 
         # 6. 构建 Figure
+        self._series_plot_data_list = series_plot_data_list
         figure = self._plot_manager.build_figure(plot_spec)
 
         # 7. 推送到 View
@@ -400,7 +447,7 @@ class FittingPresenter:
             return ["All"]
         if self._state.group_column:
             raw = self._state.data[self._state.group_column].dropna().unique()
-            return sorted(raw)
+            return sorted(str(v) for v in raw)
         return ["All"]
 
     def _build_stats_tree_data(self, fit_results, stats_cache) -> list:
@@ -539,6 +586,77 @@ class FittingPresenter:
 
     # ==================== 可见性 ====================
 
+    def _apply_scale_limits(self) -> None:
+        """仅更新轴刻度和范围，不重建画布"""
+        figure = self._plot_manager._current_figure
+        if figure is None:
+            return
+        self._plot_manager.apply_scale_limits(
+            figure, self._state.x_scale, self._state.y_scale,
+            self._state.x_limits, self._state.y_limits,
+        )
+
+    def apply_visibility(self) -> None:
+        """仅更新可见性和图例，不重建画布、不重新拟合"""
+        # 先同步 _series_plot_data_list 中的 visible 标记到最新 _state.visibility
+        self._update_series_plot_data_visibility()
+        figure = self._plot_manager._current_figure
+        if figure is None or not self._series_plot_data_list:
+            return
+        self._plot_manager.apply_visibility(figure, self._series_plot_data_list)
+        # 重建 stats tree（也需要反映可见性变化）
+        self._view.display_stats(self._build_stats_tree_data(
+            self._state.fit_results, self._state.stats_cache))
+
+    def apply_series_styles(self) -> None:
+        """轻量样式更新：就地修改 artist 属性，不重新拟合
+
+        适用于 marker/线型/透明度/大小/线宽 的变更。
+        如果 limit 变了（影响统计），调用方应改用 update_all()。
+        """
+        # 1. 从 View 读最新样式
+        series_styles = self._view.get_series_styles()
+        # 构建 selector_idx → style 映射
+        style_by_si = {si: s for si, s in enumerate(series_styles)}
+        # 2. 更新 _series_plot_data_list 中的样式字段（用 selector_idx + group_index 匹配）
+        for spd in self._series_plot_data_list:
+            style = style_by_si.get(spd.selector_idx, {})
+            gi = spd.group_index
+
+            # 循环解析
+            if style.get("cycle_marker", True):
+                spd.marker = CYCLE_MARKERS[gi % len(CYCLE_MARKERS)]
+            else:
+                spd.marker = style.get("marker", spd.marker)
+            if style.get("cycle_linestyle", True):
+                spd.linestyle = CYCLE_LINESTYLES[gi % len(CYCLE_LINESTYLES)]
+            else:
+                spd.linestyle = style.get("linestyle", spd.linestyle)
+
+            spd.scatter_alpha = style.get("scatter_alpha", spd.scatter_alpha)
+            spd.curve_alpha = style.get("curve_alpha", spd.curve_alpha)
+            spd.marker_size = style.get("marker_size", spd.marker_size)
+            spd.line_width = style.get("line_width", spd.line_width)
+
+            # 颜色
+            custom_color = style.get("custom_color", "")
+            if custom_color:
+                if "|" in custom_color:
+                    cols = [c.strip() for c in custom_color.split("|") if c.strip()]
+                    if cols:
+                        spd.color = cols[spd.group_index % len(cols)]
+                elif custom_color.startswith("#"):
+                    spd.color = custom_color
+                else:
+                    cust_pal = COLOR_PALETTES.get(custom_color)
+                    if cust_pal:
+                        spd.color = cust_pal["colors"][0]
+        # 3. 就地更新 artist
+        figure = self._plot_manager._current_figure
+        if figure is None:
+            return
+        self._plot_manager.apply_styles(figure, self._series_plot_data_list)
+
     def toggle_visibility(self, col: str, group: str) -> None:
         """切换整体可见性（散点 + 曲线同步）"""
         key = (col, group)
@@ -550,11 +668,20 @@ class FittingPresenter:
         entry["scatter"] = new_vis
         entry["curve"] = new_vis
         self._state.visibility[key] = entry
-        self.update_all()
+        self.apply_visibility()
 
     def toggle_column_visibility(self, col: str) -> None:
         """切换整列可见性"""
-        keys = [k for k in self._state.visibility if k[0] == col]
+        # 从 _series_plot_data_list 收集该列的所有 (col, group) key
+        # 这样即使 _state.visibility 还未初始化（首次加载），也能正确获取应有 key 集合
+        keys = list(set(
+            (spd.col_name, spd.group or "All")
+            for spd in self._series_plot_data_list
+            if spd.col_name == col
+        ))
+        # 兜底：如果 _series_plot_data_list 为空，从 _state.visibility 中取
+        if not keys:
+            keys = [k for k in self._state.visibility if k[0] == col]
         if not keys:
             return
         all_scat = all(self._state.visibility.get(k, {}).get("scatter", True) for k in keys)
@@ -562,7 +689,7 @@ class FittingPresenter:
         new_vis = not (all_scat and all_curv)
         for k in keys:
             self._state.visibility[k] = {"scatter": new_vis, "curve": new_vis}
-        self.update_all()
+        self.apply_visibility()
 
     def toggle_scatter_visibility(self, col: str, group: str) -> None:
         """切换散点可见性"""
@@ -572,8 +699,12 @@ class FittingPresenter:
             "curve": SHOW_FIT_CURVE_DEFAULT,
         }))
         entry["scatter"] = not entry.get("scatter", True)
+        # 如果关闭散点且曲线也关闭，保持数据一致
+        if not entry["scatter"] and not entry["curve"]:
+            pass
         self._state.visibility[key] = entry
-        self.update_all()
+        self._update_series_plot_data_visibility()
+        self.apply_visibility()
 
     def toggle_curve_visibility(self, col: str, group: str) -> None:
         """切换拟合曲线可见性"""
@@ -584,7 +715,16 @@ class FittingPresenter:
         }))
         entry["curve"] = not entry.get("curve", SHOW_FIT_CURVE_DEFAULT)
         self._state.visibility[key] = entry
-        self.update_all()
+        self._update_series_plot_data_visibility()
+        self.apply_visibility()
+
+    def _update_series_plot_data_visibility(self) -> None:
+        """同步 series_plot_data_list 中的 visible 标记到最新 state"""
+        for spd in self._series_plot_data_list:
+            key = (spd.col_name, spd.group or "All")
+            entry = self._state.visibility.get(key, {})
+            spd.scatter_visible = entry.get("scatter", True)
+            spd.curve_visible = entry.get("curve", SHOW_FIT_CURVE_DEFAULT)
 
     # ==================== 查询方法 ====================
 
