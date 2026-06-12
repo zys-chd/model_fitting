@@ -65,6 +65,9 @@ static void remove_dir(const char *path) {
 
 /* ── 主流程 ────────────────────────────────────────── */
 int main(void) {
+#ifdef _WIN32
+    SetConsoleOutputCP(CP_UTF8);  /* 中文不乱码 */
+#endif
     /* 确定临时目录 */
     const char *tmp = NULL;
 #ifdef _WIN32
