@@ -20,14 +20,74 @@
 #ifdef _WIN32
   #include <windows.h>
   #include <io.h>
-  #define popen   _popen
-  #define pclose  _pclose
   #define unlink  _unlink
   #define rmdir   _rmdir
   #define access  _access
   #define F_OK     0
   #define PATH_SEP '\\'
-  #define PATH_SEP_STR "\\"
+  #define PATH_SEP_STR "\\\\"
+
+  /* ── 静默 popen/system（无黑框） ── */
+  typedef struct { HANDLE hProcess, hThread, hRead; } _spipe_t;
+  static _spipe_t _spipes[16]; static int _spipe_n = 0;
+
+  static FILE *spopen(const char *cmd) {
+      if (_spipe_n >= 16) return NULL;
+      HANDLE hRead, hWrite;
+      SECURITY_ATTRIBUTES sa = {sizeof(sa), NULL, TRUE};
+      if (!CreatePipe(&hRead, &hWrite, &sa, 0)) return NULL;
+      SetHandleInformation(hRead, HANDLE_FLAG_INHERIT, 0);
+      STARTUPINFOA si = {sizeof(si)};
+      si.dwFlags = STARTF_USESTDHANDLES;
+      si.hStdOutput = hWrite; si.hStdError = hWrite; si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+      PROCESS_INFORMATION pi = {0};
+      char *cmdline = strdup(cmd);
+      BOOL ok = CreateProcessA(NULL, cmdline, NULL, NULL, TRUE,
+                               CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
+      free(cmdline); CloseHandle(hWrite);
+      if (!ok) { CloseHandle(hRead); return NULL; }
+      CloseHandle(pi.hThread);
+      _spipes[_spipe_n].hProcess = pi.hProcess;
+      _spipes[_spipe_n].hRead = hRead;
+      _spipe_n++;
+      return _fdopen(_open_osfhandle((intptr_t)hRead, 0), "r");
+  }
+
+  static int spclose(FILE *f) {
+      /* Find the matching pipe entry */
+      for (int i = 0; i < _spipe_n; i++) {
+          if (_spipes[i].hRead != INVALID_HANDLE_VALUE) {
+              fclose(f);
+              WaitForSingleObject(_spipes[i].hProcess, INFINITE);
+              DWORD ec; GetExitCodeProcess(_spipes[i].hProcess, &ec);
+              CloseHandle(_spipes[i].hProcess);
+              _spipes[i].hRead = INVALID_HANDLE_VALUE;
+              return (int)ec;
+          }
+      }
+      fclose(f); return -1;
+  }
+
+  static int ssys(const char *cmd) {
+      STARTUPINFOA si = {sizeof(si)};
+      PROCESS_INFORMATION pi = {0};
+      char *cmdline = strdup(cmd);
+      BOOL ok = CreateProcessA(NULL, cmdline, NULL, NULL, FALSE,
+                               CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
+      free(cmdline);
+      if (!ok) return -1;
+      CloseHandle(pi.hThread);
+      WaitForSingleObject(pi.hProcess, INFINITE);
+      DWORD ec; GetExitCodeProcess(pi.hProcess, &ec);
+      CloseHandle(pi.hProcess);
+      return (int)ec;
+  }
+
+  #undef popen
+  #undef pclose
+  #define popen(c,m)  spopen(c)
+  #define pclose(f)   spclose(f)
+  #define system(c)   ssys(c)
 #else
   #include <unistd.h>
   #include <signal.h>
@@ -593,25 +653,30 @@ int main(int argc, char **argv) {
     }
 
     /* ── 6. 启动应用 ── */
-    /* 构建命令行: python3 <tmp>/ZIP_PREFIX/bootstrap.py [args...] */
     char bootstrap_path[MAX_PATH_LEN];
     snprintf(bootstrap_path, sizeof(bootstrap_path),
              "%s" PATH_SEP_STR ZIP_PREFIX PATH_SEP_STR "bootstrap.py",
              g_temp_dir);
 
+#ifdef _WIN32
+    /* 用 pythonw.exe 替代 python.exe — 无控制台黑框 */
+    char pyw[MAX_PATH_LEN];
+    strncpy(pyw, python, sizeof(pyw)); pyw[sizeof(pyw)-1] = '\0';
+    char *dot = strstr(pyw, "python.exe");
+    if (dot) memcpy(dot + 6, "w.exe", 5);
+
     char cmd[8192];
-    int pos = snprintf(cmd, sizeof(cmd), "\"%s\" \"%s\"", python, bootstrap_path);
+    int pos = snprintf(cmd, sizeof(cmd), "\"%s\" \"%s\"", pyw, bootstrap_path);
     for (int i = 1; i < argc && (size_t)pos < sizeof(cmd) - 1; i++) {
         pos += snprintf(cmd + pos, sizeof(cmd) - (size_t)pos, " \"%s\"", argv[i]);
     }
 
-#ifdef _WIN32
     STARTUPINFOA si = {0}; PROCESS_INFORMATION pi = {0}; si.cb = sizeof(si);
-    CreateProcessA(NULL, cmd, NULL, NULL, FALSE, 0, NULL, g_temp_dir, &si, &pi);
-    /* 不等待，直接退出 - Python 进程独立运行 */
+    CreateProcessA(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW,
+                   NULL, g_temp_dir, &si, &pi);
     if (pi.hProcess) CloseHandle(pi.hProcess);
     if (pi.hThread) CloseHandle(pi.hThread);
-    _exit(0);  /* _exit 跳过 atexit cleanup，保留临时目录给 Python */
+    _exit(0);
 #else
     int ret = system(cmd);
     (void)ret;
