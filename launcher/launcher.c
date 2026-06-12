@@ -279,90 +279,51 @@ static int extract_zip(const unsigned char *data, size_t size, const char *dest)
 /* ── 查找 Python（含版本验证） ──────────────────────── */
 static int find_python(char *buf, size_t sz) {
 #ifdef _WIN32
-    /* 候选路径列表 */
     char cand[512];
     int have_cand = 0;
 
-    /* 1. py 启动器获取最新 Python 3.x 路径 */
-    {
-        FILE *fp = popen("py -3 -c \"import sys; print(sys.executable, end='')\" 2>nul", "r");
-        if (fp) {
-            if (fgets(cand, (int)sizeof(cand), fp)) {
-                size_t len = strlen(cand);
-                while (len > 0 && (cand[len-1] == '\n' || cand[len-1] == '\r')) cand[--len] = '\0';
-                if (len > 0 && access(cand, F_OK) == 0) have_cand = 1;
-            }
-            pclose(fp);
-        }
-    }
+    /* 1. py 启动器 */
+    { FILE *fp = popen("py -3 -c \"import sys; print(sys.executable, end='')\" 2>nul", "r");
+      if (fp) { if (fgets(cand, sizeof(cand), fp)) {
+          size_t l = strlen(cand); while (l>0 && (cand[l-1]=='\n'||cand[l-1]=='\r')) cand[--l]=0;
+          if (l>0 && access(cand, F_OK)==0) have_cand=1;
+      } pclose(fp); } }
 
-    /* 2. where python — 收集所有匹配 */
-    if (!have_cand) {
-        FILE *fp = popen("where python 2>nul", "r");
-        if (fp) {
-            if (fgets(cand, (int)sizeof(cand), fp)) {
-                size_t len = strlen(cand);
-                while (len > 0 && (cand[len-1] == '\n' || cand[len-1] == '\r')) cand[--len] = '\0';
-                if (len > 0 && access(cand, F_OK) == 0) have_cand = 1;
-            }
-            pclose(fp);
-        }
-    }
+    /* 2. where python */
+    if (!have_cand) { FILE *fp = popen("where python 2>nul", "r");
+      if (fp) { if (fgets(cand, sizeof(cand), fp)) {
+          size_t l = strlen(cand); while (l>0 && (cand[l-1]=='\n'||cand[l-1]=='\r')) cand[--l]=0;
+          if (l>0 && access(cand, F_OK)==0) have_cand=1;
+      } pclose(fp); } }
 
-    /* 3. 常见安装路径 */
-    if (!have_cand) {
-        const char *paths[] = {
-            "C:\\Python312\\python.exe", "C:\\Python311\\python.exe", "C:\\Python310\\python.exe",
-            "C:\\Program Files\\Python312\\python.exe", "C:\\Program Files\\Python311\\python.exe",
-            "C:\\Program Files\\Python310\\python.exe",
-            NULL
-        };
-        for (int i = 0; paths[i]; i++) {
-            if (access(paths[i], F_OK) == 0) {
-                strncpy(cand, paths[i], sizeof(cand)); cand[sizeof(cand)-1] = '\0';
-                have_cand = 1; break;
-            }
-        }
-    }
+    /* 3. 常见路径 */
+    if (!have_cand) { const char *p[] = {
+        "C:\\Python312\\python.exe","C:\\Python311\\python.exe","C:\\Python310\\python.exe",
+        "C:\\Program Files\\Python312\\python.exe","C:\\Program Files\\Python311\\python.exe",
+        "C:\\Program Files\\Python310\\python.exe", NULL};
+      for (int i=0; p[i]; i++) if (access(p[i],F_OK)==0) {
+          strncpy(cand,p[i],sizeof(cand)); cand[sizeof(cand)-1]=0; have_cand=1; break;
+      } }
 
     if (!have_cand) return -1;
 
-    /* 保存候选路径用于错误提示 */
-    char tried_path[512];
-    strncpy(tried_path, cand, sizeof(tried_path)); tried_path[sizeof(tried_path)-1] = '\0';
-
-    /* 验证版本（写临时 .py 到 %TEMP% 执行） */
-    {
-        char tmp_dir[512];
-#ifdef _WIN32
-        const char *td = getenv("TEMP");
-        if (!td) td = getenv("TMP");
-        if (!td) td = "C:\\Windows\\Temp";
-#else
-        const char *td = getenv("TMPDIR");
-        if (!td) td = "/tmp";
-#endif
-        snprintf(tmp_dir, sizeof(tmp_dir), "%s", td);
-        char tmp_py[640];
-        snprintf(tmp_py, sizeof(tmp_py), "%s/_mf_verchk.py", tmp_dir);
-        FILE *f = fopen(tmp_py, "w");
-        if (f) {
-            fprintf(f, "import sys\n");
-            fprintf(f, "sys.exit(0 if sys.version_info >= (%d, %d) else 1)\n",
-                    MIN_PYTHON_MAJOR, MIN_PYTHON_MINOR);
-            fclose(f);
-            char cmd[768];
-            snprintf(cmd, sizeof(cmd), "\"%s\" \"%s\" 2>nul", cand, tmp_py);
-            int ret = system(cmd);
-            remove(tmp_py);
-            if (ret == 0) {
-                strncpy(buf, cand, sz); buf[sz-1] = '\0'; return 0;
-            }
-        }
+    /* 验证版本: python --version → 解析 "Python 3.x.y" */
+    { char cmd[640]; snprintf(cmd, sizeof(cmd), "\"%s\" --version 2>&1", cand);
+      FILE *fp = popen(cmd, "r");
+      if (fp) {
+          char ver[64]={0}; fread(ver,1,sizeof(ver)-1,fp); pclose(fp);
+          int major=0, minor=0;
+          if (sscanf(ver, "Python %d.%d", &major, &minor) >= 2) {
+              if (major > MIN_PYTHON_MAJOR || (major == MIN_PYTHON_MAJOR && minor >= MIN_PYTHON_MINOR)) {
+                  strncpy(buf, cand, sz); buf[sz-1]=0; return 0;
+              }
+          }
+          /* 失败: 附上版本号到错误消息 */
+          snprintf(buf, sz, "VERFAIL:%s|ver=%d.%d", cand, major, minor);
+          return -1;
+      }
     }
-version_fail:
-    /* 版本不足 — 把路径写入 buf 供调用方显示 */
-    snprintf(buf, sz, "VERFAIL:%s", tried_path);
+    snprintf(buf, sz, "VERFAIL:%s|cmd=err", cand);
     return -1;
 
 #else
@@ -531,12 +492,16 @@ int main(int argc, char **argv) {
     if (find_python(python, sizeof(python)) != 0) {
         char msg[1280];
         if (strncmp(python, "VERFAIL:", 8) == 0) {
+            char *path = python + 8;
+            char *ver = strstr(path, "|ver=");
+            char found_ver[32] = "?";
+            if (ver) { *ver = '\0'; snprintf(found_ver, sizeof(found_ver), "%s", ver + 5); }
             snprintf(msg, sizeof(msg),
                 "Python 版本过低。\n\n"
-                "找到: %s\n"
+                "找到: %s  (版本 %s)\n"
                 "需要 >= " STR(MIN_PYTHON_MAJOR) "." STR(MIN_PYTHON_MINOR) "\n\n"
                 "请安装后重试：\n" PROJECT_URL,
-                python + 8);
+                path, found_ver);
         } else {
             snprintf(msg, sizeof(msg),
                 "未找到 Python " STR(MIN_PYTHON_MAJOR) "." STR(MIN_PYTHON_MINOR) " 或更高版本。\n\n"
