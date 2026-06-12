@@ -521,11 +521,10 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* ── 3. 检查 tkinter ── */
+    /* ── 3. 检查 tkinter（仅 macOS/Linux, Windows 自带） ── */
+#ifndef _WIN32
     if (check_tkinter(python) != 0) {
-#ifdef _WIN32
-        const char *guide = TKINTER_WIN_MSG;
-#elif defined(__APPLE__)
+#if defined(__APPLE__)
         const char *guide = TKINTER_MAC_MSG;
 #else
         const char *guide = TKINTER_LINUX_MSG;
@@ -536,6 +535,7 @@ int main(int argc, char **argv) {
         msgbox_error(PROJECT_NAME, msg);
         return 1;
     }
+#endif
 
     /* ── 4. 检查 pip 依赖 ── */
     char missing[2048] = {0};
