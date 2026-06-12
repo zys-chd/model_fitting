@@ -627,6 +627,7 @@ class AppWindow(tk.Toplevel):
         c.columnconfigure(2, weight=1)
         c.columnconfigure(3, weight=1)
         r = 0
+        LW = 5
         ttk.Button(c, text="数据工作簿", command=self._on_open_workbook).grid(
             row=r, column=0, columnspan=2, sticky="ew", padx=1)
         ttk.Button(c, text="导出图", command=self._on_export_image).grid(row=r, column=2, sticky="w", padx=1)
@@ -659,14 +660,13 @@ class AppWindow(tk.Toplevel):
         ttk.Checkbutton(c, text="仅导出显示项", variable=self._export_filtered).grid(
             row=r, column=1, sticky="w", padx=2)
         # 统计项显示选择 Combobox
-        ttk.Label(c, text="统计:").grid(row=r, column=2, sticky="e", padx=(4, 0))
-        self._stat_filter_combo = ttk.Combobox(c, values=["全部显示"], state="readonly", width=14)
+        ttk.Label(c, text="统计：", width=LW, anchor="e").grid(row=r, column=2, sticky="e", padx=(4, 1))
+        self._stat_filter_combo = ttk.Combobox(c, values=["全部显示"], state="readonly", width=12)
         self._stat_filter_combo.set("全部显示")
         self._stat_filter_combo.grid(row=r, column=3, sticky="w")
         self._stat_filter_combo.bind("<<ComboboxSelected>>", self._on_stat_filter_toggle)
         r += 1
 
-        LW = 5
         ttk.Label(c, text="模型：", width=LW, anchor="e").grid(row=r, column=0, sticky="e")
         mc = ttk.Combobox(c, textvariable=self._tk_vars.get("model", tk.StringVar(value=MODEL_DISPLAY[0])),
                           values=MODEL_DISPLAY, state="readonly", width=24)
