@@ -633,7 +633,7 @@ class FittingPresenter:
         except Exception as e:
             self._view.show_error("导出错误", str(e))
 
-    def export_parameters(self, path: str) -> None:
+    def export_parameters(self, path: str, visible_stats=None) -> None:
         if not self._state.fit_results:
             self._view.show_error("导出", "没有可导出的拟合结果")
             return
@@ -641,6 +641,7 @@ class FittingPresenter:
             models = self._fitting_service.get_available_models()
             self._export_service.export_parameters(
                 path, self._state.fit_results, models, self._state.stats_cache,
+                visible_stats=visible_stats,
             )
             self._view.show_info("导出", f"参数已保存至：\n{path}")
         except Exception as e:

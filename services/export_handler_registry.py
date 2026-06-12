@@ -43,9 +43,12 @@ class ExportHandler(ABC):
         ...
 
 
-def _build_rows(fit_results: dict, models: dict, stats_cache: dict) -> list[dict]:
+def _build_rows(fit_results: dict, models: dict, stats_cache: dict, visible_stats=None) -> list[dict]:
     """构建导出用的行数据（Excel / CSV / JSON 共用）"""
     rows = []
+    # 统计列名白名单 (None=全部)
+    stat_filter = visible_stats if visible_stats else None
+
     for (col, grp), (mn, params, r2, xs, cdf) in sorted(fit_results.items()):
         model = models.get(mn)
         if model is None:
@@ -57,23 +60,35 @@ def _build_rows(fit_results: dict, models: dict, stats_cache: dict) -> list[dict
         q_low = st.get(q_keys[0], 0) if len(q_keys) > 0 else 0
         q_high = st.get(q_keys[1], 0) if len(q_keys) > 1 else 0
 
+        def _val(key, default=0):
+            if stat_filter and key not in stat_filter:
+                return None  # None = 不导出此列
+            return st.get(key, default)
+
         row = {
             "Column": col,
             "Group": grp,
             "Model": mn,
             "R_squared": f"{r2:.6f}",
             "Sample_Count": len(xs),
-            "Mean": f'{st.get("均值", 0):.6g}',
-            "Std": f'{st.get("标准差", 0):.6g}',
-            "Median": f'{st.get("中位数", 0):.6g}',
-            "Quantile_Low": f'{q_low:.6g}',
-            "Quantile_High": f'{q_high:.6g}',
-            "Skewness": f'{st.get("偏度", 0):.6g}',
-            "CV_pct": f'{st.get("变异系数(%)", 0):.6g}',
-            "F_at_limit": f'{v:.6g}'
-            if isinstance((v := st.get("limit处F值")), (int, float))
-            else "",
         }
+        def _add(k, v):
+            if v is not None:
+                row[k] = f"{v:.6g}"
+
+        _add("Mean", _val("均值"))
+        _add("Std", _val("标准差"))
+        _add("Median", _val("中位数"))
+        _add("Quantile_Low", _val(q_keys[0], q_low) if q_keys else None)
+        _add("Quantile_High", _val(q_keys[1], q_high) if len(q_keys)>1 else None)
+        _add("IQR", _val("分位数间距"))
+        _add("Rel_IQR", _val("相对分位数间距"))
+        _add("Min", _val("最小值"))
+        _add("Max", _val("最大值"))
+        _add("Skewness", _val("偏度"))
+        _add("CV_pct", _val("变异系数(%)"))
+        _add("F_at_limit", _val("limit处F值") if isinstance(st.get("limit处F值"), (int,float)) else None)
+
         for pn, pv in zip(model.get_param_names(), params):
             row[pn.replace(" ", "_")] = f"{pv:.6g}"
         rows.append(row)
@@ -92,7 +107,8 @@ class CSVExportHandler(ExportHandler):
     FORMAT_NAME: ClassVar[str] = "CSV"
 
     def export(self, path, fit_results, models, stats_cache, **kwargs):
-        rows = _build_rows(fit_results, models, stats_cache)
+        vs = kwargs.pop("visible_stats", None)
+        rows = _build_rows(fit_results, models, stats_cache, visible_stats=vs)
         pd.DataFrame(rows).to_csv(path, index=False, **kwargs)
 
 
@@ -104,7 +120,8 @@ class JSONExportHandler(ExportHandler):
     FORMAT_NAME: ClassVar[str] = "JSON"
 
     def export(self, path, fit_results, models, stats_cache, **kwargs):
-        rows = _build_rows(fit_results, models, stats_cache)
+        vs = kwargs.pop("visible_stats", None)
+        rows = _build_rows(fit_results, models, stats_cache, visible_stats=vs)
         pd.DataFrame(rows).to_json(
             path, orient="records", force_ascii=False, indent=2, **kwargs
         )
@@ -118,7 +135,8 @@ class ExcelExportHandler(ExportHandler):
     FORMAT_NAME: ClassVar[str] = "Excel"
 
     def export(self, path, fit_results, models, stats_cache, **kwargs):
-        rows = _build_rows(fit_results, models, stats_cache)
+        vs = kwargs.pop("visible_stats", None)
+        rows = _build_rows(fit_results, models, stats_cache, visible_stats=vs)
         pd.DataFrame(rows).to_excel(path, index=False, **kwargs)
 
 

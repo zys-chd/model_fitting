@@ -653,7 +653,11 @@ class AppWindow(tk.Toplevel):
 
         ttk.Checkbutton(c, text="仅保留 _shift 列", variable=self._filter_shift_only,
                         command=self._on_filter_shift_toggle).grid(
-            row=r, column=0, columnspan=2, sticky="w", padx=2)
+            row=r, column=0, sticky="w", padx=2)
+        # 导出筛选 Checkbutton
+        self._export_filtered = tk.BooleanVar(value=False)
+        ttk.Checkbutton(c, text="仅导出显示项", variable=self._export_filtered).grid(
+            row=r, column=1, sticky="w", padx=2)
         # 统计项显示选择 Combobox
         ttk.Label(c, text="统计:").grid(row=r, column=2, sticky="e", padx=(4, 0))
         self._stat_filter_combo = ttk.Combobox(c, values=["全部显示"], state="readonly", width=14)
@@ -923,7 +927,12 @@ class AppWindow(tk.Toplevel):
             parent=self,
         )
         if path:
-            self._presenter.export_parameters(path)
+            filter_stats = None
+            if self._export_filtered.get():
+                vs = self._presenter._state.visible_stats
+                if vs is not None:
+                    filter_stats = vs
+            self._presenter.export_parameters(path, visible_stats=filter_stats)
 
     def _on_export_template(self):
         path = filedialog.asksaveasfilename(
