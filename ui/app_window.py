@@ -398,8 +398,12 @@ class AppWindow(tk.Toplevel):
                 for pn, pv in item.get("params", []):
                     t.insert(grp_node, tk.END, text=pn, values=(f"{pv:.6g}",))
                 for lbl, val in item.get("stats", {}).items():
+                    if self._presenter._state.visible_stats is not None and lbl not in self._presenter._state.visible_stats:
+                        continue
                     t.insert(grp_node, tk.END, text=lbl,
                              values=(f"{val:.6g}" if isinstance(val, float) else str(val),))
+        # 刷新统计过滤 Combobox
+        self._refresh_stat_filter_combo()
 
     def _on_stats_tree_click(self, event):
         """点击统计树切换显示/隐藏"""
@@ -599,24 +603,29 @@ class AppWindow(tk.Toplevel):
     def _build_top_bar(self):
         tf = ttk.Frame(self)
         tf.pack(side=tk.TOP, fill=tk.X, padx=8, pady=8)
+        tf.columnconfigure([0,1,2], weight=1)
 
         # 数据选择（SeriesSelector 容器）
         self._selector_frame = ttk.LabelFrame(tf, text="数据选择")
-        self._selector_frame.pack(side=tk.LEFT, fill=tk.Y, padx=4, pady=4)
+        self._selector_frame.grid(column=0, row=0, sticky="nswe", padx=4, pady=4)
         self._selector_inner = ttk.Frame(self._selector_frame)
         self._selector_inner.pack()
 
         # 数据控制面板
         c = ttk.LabelFrame(tf, text="数据控制")
-        c.pack(side=tk.LEFT, fill=tk.Y, padx=4, pady=4)
+        c.grid(column=1, row=0, sticky="nswe", padx=4, pady=4)
         self._build_control_panel(c)
 
         # 绘图控制面板
         pc = ttk.LabelFrame(tf, text="绘图控制")
-        pc.pack(side=tk.LEFT, fill=tk.Y, padx=4, pady=4)
+        pc.grid(column=2, row=0, sticky="nswe", padx=4, pady=4)
         self._build_plot_control(pc)
 
     def _build_control_panel(self, c):
+        c.columnconfigure(0, weight=1)
+        c.columnconfigure(1, weight=1)
+        c.columnconfigure(2, weight=1)
+        c.columnconfigure(3, weight=1)
         r = 0
         ttk.Button(c, text="数据工作簿", command=self._on_open_workbook).grid(
             row=r, column=0, columnspan=2, sticky="ew", padx=1)
@@ -629,7 +638,7 @@ class AppWindow(tk.Toplevel):
         # 分位数 Entry（同行）
         self._tk_vars["quantile_low"] = tk.StringVar(value="5")
         self._tk_vars["quantile_high"] = tk.StringVar(value="95")
-        ttk.Label(c, text=" 分位数:").grid(row=r, column=2, sticky="e", padx=(4, 0))
+        ttk.Label(c, text=" 分位数:").grid(row=r, column=2, sticky="w", padx=(4, 0))
         self._q_low_entry = ttk.Entry(c, textvariable=self._tk_vars["quantile_low"], width=5)
         self._q_low_entry.grid(row=r, column=2, sticky="e", padx=(55, 0))
         self._q_low_entry.bind("<FocusOut>", self._on_quantile_change)
@@ -644,7 +653,13 @@ class AppWindow(tk.Toplevel):
 
         ttk.Checkbutton(c, text="仅保留 _shift 列", variable=self._filter_shift_only,
                         command=self._on_filter_shift_toggle).grid(
-            row=r, column=0, columnspan=4, sticky="w", padx=2)
+            row=r, column=0, columnspan=2, sticky="w", padx=2)
+        # 统计项显示选择 Combobox
+        ttk.Label(c, text="统计:").grid(row=r, column=2, sticky="e", padx=(4, 0))
+        self._stat_filter_combo = ttk.Combobox(c, values=["全部显示"], state="readonly", width=14)
+        self._stat_filter_combo.set("全部显示")
+        self._stat_filter_combo.grid(row=r, column=3, sticky="w")
+        self._stat_filter_combo.bind("<<ComboboxSelected>>", self._on_stat_filter_toggle)
         r += 1
 
         LW = 5
@@ -674,6 +689,7 @@ class AppWindow(tk.Toplevel):
     def _build_plot_control(self, pc):
         r = 0
         LW = 5
+        pc.columnconfigure([0,1,2,3,4,5], weight=1)
         ttk.Label(pc, text="X 轴：", width=LW, anchor="e").grid(row=r, column=0, sticky="e")
         xc = ttk.Combobox(pc, textvariable=self._tk_vars["x_scale"],
                           values=SCALE_DISPLAY, state="readonly", width=6)
@@ -1336,6 +1352,33 @@ class AppWindow(tk.Toplevel):
             self._canvas.draw_idle()
 
     # ==================== 分位数 + 统计说明 ====================
+
+    def _on_stat_filter_toggle(self, event=None):
+        """统计项 Combobox 选择：切换对应项的可见性"""
+        sel = self._stat_filter_combo.get()
+        if not sel or sel == "全部显示":
+            return
+        # 去掉前缀 ☑/☐
+        label = sel[1:].strip()
+        visible = self._presenter.toggle_stat_visibility(label)
+        self._refresh_stat_filter_combo(visible)
+
+    def _refresh_stat_filter_combo(self, visible_labels=None):
+        """刷新统计过滤 Combobox 的内容（☑显示/☐隐藏）"""
+        labels = self._presenter.get_stat_labels()
+        if not labels:
+            self._stat_filter_combo["values"] = ["全部显示"]
+            self._stat_filter_combo.set("全部显示")
+            return
+        if visible_labels is None:
+            vs = self._presenter._state.visible_stats
+            visible_labels = list(vs) if vs is not None else labels
+        items = []
+        for lb in labels:
+            prefix = "☑" if lb in visible_labels else "☐"
+            items.append(f"{prefix} {lb}")
+        self._stat_filter_combo["values"] = items
+        self._stat_filter_combo.set("")
 
     def _on_quantile_change(self, event=None):
         try:

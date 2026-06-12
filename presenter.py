@@ -52,6 +52,7 @@ class AppState:
         self.color_palette: str = "tab10"
         self.quantile_low: float = 5.0
         self.quantile_high: float = 95.0
+        self.visible_stats: Optional[set] = None  # None=全部显示, set={"均值","标准差",...}
 
 
 class FittingPresenter:
@@ -183,6 +184,25 @@ class FittingPresenter:
     def set_quantile_high(self, q: float) -> None:
         self._state.quantile_high = q
         self.refresh_stats_only()
+
+    def get_stat_labels(self) -> list[str]:
+        """返回所有可能的统计标签（从 stats_cache 第一个条目收集）"""
+        if not self._state.stats_cache:
+            return []
+        first = next(iter(self._state.stats_cache.values()))
+        return list(first.keys())
+
+    def toggle_stat_visibility(self, label: str) -> list[str]:
+        """切换统计项可见性，返回更新后的可见标签列表"""
+        labels = self.get_stat_labels()
+        if self._state.visible_stats is None:
+            self._state.visible_stats = set(labels)
+        if label in self._state.visible_stats:
+            self._state.visible_stats.discard(label)
+        else:
+            self._state.visible_stats.add(label)
+        self.refresh_stats_only()
+        return [l for l in labels if l in self._state.visible_stats]
 
     def refresh_stats_only(self):
         """仅重算统计信息并刷新 stats 树，不重拟合不重绘"""
