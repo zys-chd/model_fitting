@@ -276,49 +276,69 @@ static int extract_zip(const unsigned char *data, size_t size, const char *dest)
     return extracted > 0 ? 0 : -1;
 }
 
-/* ── 查找 Python ───────────────────────────────────── */
+/* ── 查找 Python（含版本验证） ──────────────────────── */
 static int find_python(char *buf, size_t sz) {
 #ifdef _WIN32
-    /* Windows: 先试 py 启动器(选最新), 再试 where python, 最后试常见路径 */
-    const char *cmds[] = {
-        "py -3 2>nul",                           /* Python launcher, 选最新 3.x */
-        "where python 2>nul",
-        "where python3 2>nul",
-        NULL
-    };
-    for (int i = 0; cmds[i]; i++) {
-        FILE *fp = popen(cmds[i], "r");
-        if (!fp) continue;
-        if (fgets(buf, (int)sz, fp)) {
-            size_t len = strlen(buf);
-            while (len > 0 && (buf[len-1] == '\n' || buf[len-1] == '\r')) buf[--len] = '\0';
-            /* py 启动器输出格式: "Python 3.x ..." → 提取第二列 */
-            if (strncmp(cmds[i], "py ", 3) == 0 && buf[0] != 'C') {
-                /* 不是路径，是版本描述，换 where python 查真实路径 */
-                pclose(fp);
-                break;
+    /* 候选路径列表 */
+    char cand[512];
+    int have_cand = 0;
+
+    /* 1. py 启动器获取最新 Python 3.x 路径 */
+    {
+        FILE *fp = popen("py -3 -c \"import sys; print(sys.executable, end='')\" 2>nul", "r");
+        if (fp) {
+            if (fgets(cand, (int)sizeof(cand), fp)) {
+                size_t len = strlen(cand);
+                while (len > 0 && (cand[len-1] == '\n' || cand[len-1] == '\r')) cand[--len] = '\0';
+                if (len > 0 && access(cand, F_OK) == 0) have_cand = 1;
             }
             pclose(fp);
-            if (len > 0 && (buf[0] == 'C' || buf[0] == '/' || buf[1] == ':')) return 0;
         }
-        pclose(fp);
     }
-    /* 常见安装路径 */
-    const char *common[] = {
-        "C:\\Python312\\python.exe",
-        "C:\\Python311\\python.exe",
-        "C:\\Python310\\python.exe",
-        "C:\\Program Files\\Python312\\python.exe",
-        "C:\\Program Files\\Python311\\python.exe",
-        "C:\\Program Files\\Python310\\python.exe",
-        NULL
-    };
-    for (int i = 0; common[i]; i++) {
-        if (access(common[i], F_OK) == 0) {
-            strncpy(buf, common[i], sz); buf[sz-1] = '\0'; return 0;
+
+    /* 2. where python — 收集所有匹配 */
+    if (!have_cand) {
+        FILE *fp = popen("where python 2>nul", "r");
+        if (fp) {
+            if (fgets(cand, (int)sizeof(cand), fp)) {
+                size_t len = strlen(cand);
+                while (len > 0 && (cand[len-1] == '\n' || cand[len-1] == '\r')) cand[--len] = '\0';
+                if (len > 0 && access(cand, F_OK) == 0) have_cand = 1;
+            }
+            pclose(fp);
         }
+    }
+
+    /* 3. 常见安装路径 */
+    if (!have_cand) {
+        const char *paths[] = {
+            "C:\\Python312\\python.exe", "C:\\Python311\\python.exe", "C:\\Python310\\python.exe",
+            "C:\\Program Files\\Python312\\python.exe", "C:\\Program Files\\Python311\\python.exe",
+            "C:\\Program Files\\Python310\\python.exe",
+            NULL
+        };
+        for (int i = 0; paths[i]; i++) {
+            if (access(paths[i], F_OK) == 0) {
+                strncpy(cand, paths[i], sizeof(cand)); cand[sizeof(cand)-1] = '\0';
+                have_cand = 1; break;
+            }
+        }
+    }
+
+    if (!have_cand) return -1;
+
+    /* 验证版本 */
+    char code[256];
+    snprintf(code, sizeof(code),
+             "\"%s\" -c \"import sys; exit(0 if sys.version_info[:2]>=("
+             STR(MIN_PYTHON_MAJOR) "," STR(MIN_PYTHON_MINOR) ") else 1)\" 2>nul",
+             cand);
+    int ret = system(code);
+    if (ret == 0) {
+        strncpy(buf, cand, sz); buf[sz-1] = '\0'; return 0;
     }
     return -1;
+
 #else
     /* macOS / Linux */
     const char *cands[] = {"python3", "python", NULL};
@@ -480,28 +500,18 @@ int main(int argc, char **argv) {
 #endif
     atexit(do_cleanup);
 
-    /* ── 1. 查找 Python ── */
+    /* ── 1. 查找 Python（含版本验证） ── */
     char python[MAX_PATH_LEN] = {0};
     if (find_python(python, sizeof(python)) != 0) {
-        msgbox_error(PROJECT_NAME,
-            "未找到 Python。\n\n"
-            "请安装 Python " STR(MIN_PYTHON_MAJOR) "." STR(MIN_PYTHON_MINOR) " 或更高版本：\n"
-            PROJECT_URL);
-        return 1;
-    }
-
-    /* ── 2. 检查 Python 版本 ── */
-    if (check_python_version(python) != 0) {
         char msg[1024];
         snprintf(msg, sizeof(msg),
-            "Python 版本过低。\n\n"
-            "需要 Python >= " STR(MIN_PYTHON_MAJOR) "." STR(MIN_PYTHON_MINOR) "。\n"
-            "请升级后重试：\n" PROJECT_URL);
+            "未找到 Python " STR(MIN_PYTHON_MAJOR) "." STR(MIN_PYTHON_MINOR) " 或更高版本。\n\n"
+            "请安装后重试：\n" PROJECT_URL);
         msgbox_error(PROJECT_NAME, msg);
         return 1;
     }
 
-    /* ── 3. 创建临时目录、解压资源 ── */
+    /* ── 2. 创建临时目录、解压资源 ── */
     if (create_temp_dir(g_temp_dir, sizeof(g_temp_dir)) != 0) {
         msgbox_error(PROJECT_NAME, "无法创建临时目录。");
         return 1;
@@ -511,7 +521,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* ── 4. 检查 tkinter ── */
+    /* ── 3. 检查 tkinter ── */
     if (check_tkinter(python) != 0) {
 #ifdef _WIN32
         const char *guide = TKINTER_WIN_MSG;
@@ -527,7 +537,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* ── 5. 检查 pip 依赖 ── */
+    /* ── 4. 检查 pip 依赖 ── */
     char missing[2048] = {0};
     int missing_count = 0;
     for (int i = 0; i < REQUIREMENTS_COUNT; i++) {
@@ -538,7 +548,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    /* ── 6. 安装缺失依赖 ── */
+    /* ── 5. 安装缺失依赖 ── */
     if (missing_count > 0) {
         /* 提示用户 */
         char msg_text[3072];
@@ -579,7 +589,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    /* ── 7. 启动应用 ── */
+    /* ── 6. 启动应用 ── */
     /* 构建命令行: python3 <tmp>/ZIP_PREFIX/bootstrap.py [args...] */
     char bootstrap_path[MAX_PATH_LEN];
     snprintf(bootstrap_path, sizeof(bootstrap_path),
