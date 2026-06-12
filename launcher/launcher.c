@@ -581,36 +581,14 @@ static void sig_handler(int s) { (void)s; do_cleanup(); _exit(1); }
 #endif
 
 /* ═══════════════════════════════════════════════════════
- * 依赖检查（全部在 C 层完成，不依赖 bootstrap.py）
+ * 依赖检查
  * ═══════════════════════════════════════════════════════ */
 
-/* 运行 python -c, 检查输出是否含 "Error"（不依赖 exit code） */
-static int run_py_cmd(const char *python, const char *py_code, char *out, size_t out_sz) {
-    char cmd[4096];
-    snprintf(cmd, sizeof(cmd), "\"%s\" -c \"%s\"", python, py_code);
-    FILE *fp = popen(cmd, "r");
-    if (!fp) return -1;
-    if (out && out_sz > 0) {
-        size_t n = fread(out, 1, out_sz - 1, fp);
-        if (n > 0) { out[n] = '\0'; } else { out[0] = '\0'; }
-    } else {
-        /* 即使不需要输出也读一下, 确保 pipe 关闭 */
-        char dummy[256];
-        fread(dummy, 1, sizeof(dummy), fp);
-    }
-    pclose(fp);
-    /* 检查输出内容而不是 exit code */
-    if (out && out_sz > 0 && out[0] != '\0') {
-        if (strstr(out, "ModuleNotFoundError") || strstr(out, "ImportError")) return 1;
-    }
-    return 0;
-}
-
-/* 检查 pip 包是否已安装（检查输出中有无 Error，不依赖 exit code） */
+/* 检查 pip 包是否已安装（直接用 system 退出码，ssys=GetExitCodeProcess 可靠） */
 static int check_package(const char *python, const char *import_name) {
-    char code[256], out[512] = {0};
-    snprintf(code, sizeof(code), "import %s", import_name);
-    return run_py_cmd(python, code, out, sizeof(out));
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "\"%s\" -c \"import %s\"", python, import_name);
+    return system(cmd);
 }
 
 /* pip install 包列表 */
@@ -622,61 +600,15 @@ static int pip_install(const char *python, const char *packages) {
     return system(cmd);
 }
 
-/* 逐包安装（带下载进度） */
-static int pip_install_one(const char *python, const char *pkg, int cur, int total) {
-    char cmd[4096];
+/* 逐包安装（带包名进度，不解析下载细节避免文本处理坑） */
+static void pip_install_one(const char *python, const char *pkg, int cur, int total) {
+    char cmd[4096], prog[128];
+    snprintf(prog, sizeof(prog), "正在安装 %s (%d/%d)...", pkg, cur, total);
+    show_status(prog); pump_messages();
     snprintf(cmd, sizeof(cmd),
-             "\"%s\" -m pip install --disable-pip-version-check "
-             "--progress-bar on %s", python, pkg);
-
-    { char prog[128]; snprintf(prog, sizeof(prog),
-        "正在安装 %s (%d/%d)...", pkg, cur, total);
-      show_status(prog); pump_messages(); }
-
-    FILE *fp = popen(cmd, "r");
-    if (!fp) return 0;  /* 不阻塞，让后续验证处理 */
-
-    /* 逐字符读，处理 pip 的 \r 进度更新（不依赖 \n） */
-    char buf[512]; int bi = 0; int ch;
-    while ((ch = fgetc(fp)) != EOF) {
-        if (ch == '\r' || ch == '\n') {
-            if (bi > 0) { buf[bi] = '\0'; bi = 0; }
-            if (ch == '\r') continue;  /* \r 不单独触发处理 */
-        }
-        if (bi < (int)sizeof(buf) - 1) buf[bi++] = (char)ch;
-        /* 遇到 \n 或缓冲区满, 检查这一行 */
-        if (ch == '\n' || bi >= (int)sizeof(buf) - 2) {
-            buf[bi] = '\0'; bi = 0;
-            char *dl = strstr(buf, "Downloading");
-            if (dl) {
-                char sub[256];
-                /* 提取 "Downloading ..." 后面部分 */
-                char *start = dl;  /* 从 Downloading 开始 */
-                /* 截断到 \r 或行尾 */
-                char *end = strpbrk(start, "\r\n");
-                size_t n = end ? (size_t)(end - start) : strlen(start);
-                if (n > 200) n = 200;
-                memcpy(sub, start, n); sub[n] = '\0';
-                show_sub_status(sub);
-            }
-            if (strstr(buf, "already satisfied") || strstr(buf, "Requirement already")) {
-                show_sub_status("已缓存, 跳过下载");
-            }
-        }
-        pump_messages();
-    }
-    pclose(fp);
-    show_sub_status("");
-    return 0;  /* 不信任退出码, 由后续 check_package 验证 */
-}
-
-/* 检查 Python 版本 */
-static int check_python_version(const char *python) {
-    char code[256];
-    snprintf(code, sizeof(code),
-             "import sys; sys.exit(0 if sys.version_info >= (%d,%d) else 1)",
-             MIN_PYTHON_MAJOR, MIN_PYTHON_MINOR);
-    return run_py_cmd(python, code, NULL, 0);
+             "\"%s\" -m pip install --quiet --disable-pip-version-check %s",
+             python, pkg);
+    system(cmd);
 }
 
 /* 检查 tkinter */
