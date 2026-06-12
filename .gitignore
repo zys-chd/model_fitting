@@ -15,3 +15,13 @@ log/
 tempCodeRunnerFile.py
 /test.py
 /test.xlsx
+
+# C launcher build artifacts
+launcher/resource.h
+launcher/model_fitting
+launcher/model_fitting.exe
+launcher/*.o
+launcher/build/
+
+# macOS resource forks
+._*
