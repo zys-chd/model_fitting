@@ -131,13 +131,44 @@ root.mainloop()
 
 详见 `test_app.py`。
 
-## 一键打包
+## 打包发布
+
+### 方式一：C Launcher（推荐，~730 KB）
+
+将项目资源 ZIP 嵌入 C 程序，运行时解压到临时目录，调用系统 Python 执行。
+依赖缺失时自动 `pip install`，退出后清理临时目录。
+
+**前置条件：** 目标机器需安装 Python 3.10+（不需要预装任何包）
+
+```bash
+# 打包（需要 C 编译器 + zlib）
+python pack.py
+
+# 输出: launcher/model_fitting (macOS/Linux) 或 model_fitting.exe (Windows)
+```
+
+**工作原理：**
+1. `pack.py` 将项目文件压缩为 ZIP，转为 C 数组，编译为独立二进制
+2. 运行时解压到系统临时目录
+3. 调用系统 `python3 bootstrap.py --auto`
+4. `bootstrap.py` 检查 tkinter 和依赖（numpy, scipy, pandas, matplotlib, pillow, openpyxl, xlrd），缺则自动安装
+5. 启动主程序
+6. 退出时自动清理临时目录
+
+**体积对比：**
+
+| 方案 | 体积 | 需预装 |
+|------|------|--------|
+| PyInstaller | ~74 MB | 无 |
+| C Launcher | ~730 KB | Python 3.10+ |
+
+### 方式二：PyInstaller（传统）
 
 ```bash
 build.bat
 ```
 
-生成 `dist/model_fitting.exe`（约 74 MB）。
+生成 `dist/model_fitting.exe`（约 74 MB）。包含完整 Python 运行时，无需目标机器安装任何环境。
 
 ## 项目结构
 
