@@ -601,7 +601,7 @@ static int run_py_cmd(const char *python, const char *py_code, char *out, size_t
     pclose(fp);
     /* 检查输出内容而不是 exit code */
     if (out && out_sz > 0 && out[0] != '\0') {
-        if (strstr(out, "Error") || strstr(out, "Traceback")) return 1;
+        if (strstr(out, "ModuleNotFoundError") || strstr(out, "ImportError")) return 1;
     }
     return 0;
 }
@@ -625,9 +625,8 @@ static int pip_install(const char *python, const char *packages) {
 /* 逐包安装（带下载进度） */
 static int pip_install_one(const char *python, const char *pkg, int cur, int total) {
     char cmd[4096];
-    /* --progress-bar on 让 pip 输出下载进度 */
     snprintf(cmd, sizeof(cmd),
-             "\"%s\" -m pip install --quiet --disable-pip-version-check "
+             "\"%s\" -m pip install --disable-pip-version-check "
              "--progress-bar on %s", python, pkg);
 
     { char prog[128]; snprintf(prog, sizeof(prog),
@@ -635,45 +634,40 @@ static int pip_install_one(const char *python, const char *pkg, int cur, int tot
       show_status(prog); pump_messages(); }
 
     FILE *fp = popen(cmd, "r");
-    if (!fp) return -1;
+    if (!fp) return 0;  /* 不阻塞，让后续验证处理 */
 
-    char line[512];
-    while (fgets(line, sizeof(line), fp)) {
-        /* 解析 pip 下载进度: "Downloading ... 1.2/15.3 MB" */
-        char *dl = strstr(line, "Downloading");
-        if (dl) {
-            /* 提取文件名和进度 */
-            char fname[128] = ""; char prog_str[64] = "";
-            /* 格式: "Downloading numpy-2.0.0-cp312-...whl (15.3 MB)" */
-            char *lp = strchr(dl + 11, '(');
-            char *slash = NULL;
-            if (lp) {
-                /* 看看有没有 "1.2/" 这种进度 */
-                slash = strchr(dl + 11, '/');
-                if (!slash || slash > lp) slash = NULL;
-            }
-            if (slash) {
-                /* 有 已下载/总大小: "1.2/15.3 MB" */
-                char sub[256]; snprintf(sub, sizeof(sub),
-                    "下载中... %.60s", dl + 11);
-                /* 截断到换行 */
-                char *nl = strchr(sub, '\r');
-                if (!nl) nl = strchr(sub, '\n');
-                if (nl) *nl = '\0';
-                show_sub_status(sub);
-            } else {
-                show_sub_status("下载中...");
-            }
+    /* 逐字符读，处理 pip 的 \r 进度更新（不依赖 \n） */
+    char buf[512]; int bi = 0; int ch;
+    while ((ch = fgetc(fp)) != EOF) {
+        if (ch == '\r' || ch == '\n') {
+            if (bi > 0) { buf[bi] = '\0'; bi = 0; }
+            if (ch == '\r') continue;  /* \r 不单独触发处理 */
         }
-        /* 已安装缓存信息 */
-        if (strstr(line, "already satisfied") || strstr(line, "Requirement already")) {
-            show_sub_status("已缓存, 跳过下载");
+        if (bi < (int)sizeof(buf) - 1) buf[bi++] = (char)ch;
+        /* 遇到 \n 或缓冲区满, 检查这一行 */
+        if (ch == '\n' || bi >= (int)sizeof(buf) - 2) {
+            buf[bi] = '\0'; bi = 0;
+            char *dl = strstr(buf, "Downloading");
+            if (dl) {
+                char sub[256];
+                /* 提取 "Downloading ..." 后面部分 */
+                char *start = dl;  /* 从 Downloading 开始 */
+                /* 截断到 \r 或行尾 */
+                char *end = strpbrk(start, "\r\n");
+                size_t n = end ? (size_t)(end - start) : strlen(start);
+                if (n > 200) n = 200;
+                memcpy(sub, start, n); sub[n] = '\0';
+                show_sub_status(sub);
+            }
+            if (strstr(buf, "already satisfied") || strstr(buf, "Requirement already")) {
+                show_sub_status("已缓存, 跳过下载");
+            }
         }
         pump_messages();
     }
-    int ret = pclose(fp);
-    show_sub_status("");  /* 清除子状态 */
-    return ret == 0 ? 0 : -1;
+    pclose(fp);
+    show_sub_status("");
+    return 0;  /* 不信任退出码, 由后续 check_package 验证 */
 }
 
 /* 检查 Python 版本 */
@@ -788,26 +782,11 @@ int main(int argc, char **argv) {
         }
 
         if (missing_count > 0) {
-            int failed = 0;
             for (int m = 0; m < missing_count; m++) {
                 int idx = missing_idx[m];
-                if (pip_install_one(python, REQUIREMENTS[idx].pip_name,
-                                    m + 1, missing_count) != 0) {
-                    failed = 1; break;
-                }
+                pip_install_one(python, REQUIREMENTS[idx].pip_name, m + 1, missing_count);
             }
-            if (failed) {
-                char err[1024];
-                snprintf(err, sizeof(err),
-                    "依赖安装失败。\n\n"
-                    "请检查网络连接后重试。");
-#ifdef _WIN32
-                hide_status();
-#endif
-                msgbox_error(PROJECT_NAME, err);
-                return 1;
-            }
-            /* 验证 */
+            /* 验证安装 */
             int still_missing = 0;
             for (int i = 0; i < REQUIREMENTS_COUNT; i++) {
                 if (check_package(python, REQUIREMENTS[i].import_name) != 0)
