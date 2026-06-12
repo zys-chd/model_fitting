@@ -1067,6 +1067,7 @@ class AppWindow(tk.Toplevel):
                 "y_cdf": float(offsets[i, 1]),
                 "df_idx": df_idx,
                 "selector_idx": m["selector_idx"],
+                "marker": m.get("marker", "o"),
             })
         return sel
 
@@ -1099,17 +1100,27 @@ class AppWindow(tk.Toplevel):
                     "y_cdf": float(offsets[i, 1]),
                     "df_idx": df_idx,
                     "selector_idx": m["selector_idx"],
+                    "marker": m.get("marker", "o"),
                 })
         return sel
 
     def _highlight_selected(self, ax, sel: list):
-        """高亮选中的点"""
+        """高亮选中的点（保持原始 marker 形状）"""
         self._clear_selection()
-        if sel:
+        if not sel:
+            return
+        # 按 marker 分组，每组独立 scatter 以保持形状
+        from collections import defaultdict
+        by_marker = defaultdict(lambda: {"x": [], "y": []})
+        for s in sel:
+            mk = s.get("marker", "o")
+            by_marker[mk]["x"].append(s["x_raw"])
+            by_marker[mk]["y"].append(s["y_cdf"])
+        for mk, coords in by_marker.items():
             hl = ax.scatter(
-                [s["x_raw"] for s in sel],
-                [s["y_cdf"] for s in sel],
-                s=80, facecolor="none", edgecolor="red", linewidth=2, zorder=10,
+                coords["x"], coords["y"],
+                s=80, facecolor="none", edgecolor="red",
+                linewidth=2, zorder=10, marker=mk,
             )
             self._highlight_artists.append(hl)
 
