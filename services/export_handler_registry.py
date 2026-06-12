@@ -44,26 +44,34 @@ class ExportHandler(ABC):
 
 
 def _build_rows(fit_results: dict, models: dict, stats_cache: dict) -> list[dict]:
-    """构建导出用的行数据（CSV / Excel / JSON 共用）"""
+    """构建导出用的行数据（Excel / CSV / JSON 共用）"""
     rows = []
     for (col, grp), (mn, params, r2, xs, cdf) in sorted(fit_results.items()):
         model = models.get(mn)
         if model is None:
             continue
         st = stats_cache.get((col, grp), {})
+
+        # 找到动态分位数键名
+        q_keys = [k for k in st if "%分位数" in k]
+        q_low = st.get(q_keys[0], 0) if len(q_keys) > 0 else 0
+        q_high = st.get(q_keys[1], 0) if len(q_keys) > 1 else 0
+
         row = {
             "Column": col,
             "Group": grp,
             "Model": mn,
             "R_squared": f"{r2:.6f}",
             "Sample_Count": len(xs),
-            "Mean": f'{st.get("均值", st.get("mean", 0)):.6g}',
-            "Std": f'{st.get("标准差", st.get("std", 0)):.6g}',
-            "Median": f'{st.get("中位数", st.get("median", 0)):.6g}',
-            "P5": f'{st.get("5%分位数", st.get("p5", 0)):.6g}',
-            "P95": f'{st.get("95%分位数", st.get("p95", 0)):.6g}',
+            "Mean": f'{st.get("均值", 0):.6g}',
+            "Std": f'{st.get("标准差", 0):.6g}',
+            "Median": f'{st.get("中位数", 0):.6g}',
+            "Quantile_Low": f'{q_low:.6g}',
+            "Quantile_High": f'{q_high:.6g}',
+            "Skewness": f'{st.get("偏度", 0):.6g}',
+            "CV_pct": f'{st.get("变异系数(%)", 0):.6g}',
             "F_at_limit": f'{v:.6g}'
-            if isinstance((v := st.get("limit处F值", st.get("F_at_limit"))), (int, float))
+            if isinstance((v := st.get("limit处F值")), (int, float))
             else "",
         }
         for pn, pv in zip(model.get_param_names(), params):

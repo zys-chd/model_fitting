@@ -587,6 +587,8 @@ class AppWindow(tk.Toplevel):
                 label=f"  {md}", command=lambda m=md: self._show_model_info(m),
             )
         am.add_separator()
+        am.add_command(label="统计信息计算方法", command=self._show_stats_info)
+        am.add_separator()
         am.add_command(label=f"版本: {_read_version()}")
         menubar.add_cascade(label="关于", menu=am, font=menu_font)
 
@@ -631,6 +633,22 @@ class AppWindow(tk.Toplevel):
         r += 1
 
         LW = 5
+        # 自定义分位数
+        self._tk_vars["quantile_low"] = tk.StringVar(value="5")
+        self._tk_vars["quantile_high"] = tk.StringVar(value="95")
+        ttk.Label(c, text="分位数:", width=LW).grid(row=r, column=0, sticky="e")
+        self._q_low_entry = ttk.Entry(c, textvariable=self._tk_vars["quantile_low"], width=5)
+        self._q_low_entry.grid(row=r, column=1, sticky="w")
+        self._q_low_entry.bind("<FocusOut>", self._on_quantile_change)
+        self._q_low_entry.bind("<Return>", self._on_quantile_change)
+        ttk.Label(c, text="~").grid(row=r, column=2, sticky="w")
+        self._q_high_entry = ttk.Entry(c, textvariable=self._tk_vars["quantile_high"], width=5)
+        self._q_high_entry.grid(row=r, column=2, sticky="e", padx=(20, 0))
+        self._q_high_entry.bind("<FocusOut>", self._on_quantile_change)
+        self._q_high_entry.bind("<Return>", self._on_quantile_change)
+        ttk.Label(c, text="%").grid(row=r, column=3, sticky="w")
+        r += 1
+
         ttk.Label(c, text="模型：", width=LW, anchor="e").grid(row=r, column=0, sticky="e")
         mc = ttk.Combobox(c, textvariable=self._tk_vars.get("model", tk.StringVar(value=MODEL_DISPLAY[0])),
                           values=MODEL_DISPLAY, state="readonly", width=24)
@@ -885,8 +903,8 @@ class AppWindow(tk.Toplevel):
 
     def _on_export_parameters(self):
         path = filedialog.asksaveasfilename(
-            defaultextension=".csv",
-            filetypes=[("CSV 文件", "*.csv"), ("所有文件", "*.*")],
+            defaultextension=".xlsx",
+            filetypes=[("Excel 文件", "*.xlsx"), ("CSV 文件", "*.csv"), ("所有文件", "*.*")],
             parent=self,
         )
         if path:
@@ -1317,6 +1335,47 @@ class AppWindow(tk.Toplevel):
                     transform=ax.get_xaxis_transform())
         if self._canvas:
             self._canvas.draw_idle()
+
+    # ==================== 分位数 + 统计说明 ====================
+
+    def _on_quantile_change(self, event=None):
+        try:
+            ql = float(self._tk_vars["quantile_low"].get())
+            qh = float(self._tk_vars["quantile_high"].get())
+            if 0 <= ql <= 100 and 0 <= qh <= 100 and ql < qh:
+                self._presenter.set_quantile_low(ql)
+                self._presenter.set_quantile_high(qh)
+        except ValueError:
+            pass
+
+    def _show_stats_info(self):
+        info = (
+            "统计信息计算方法说明\n"
+            "──────────────────────────\n\n"
+            "样本数 (n): 参与计算的有效数据点个数。\n\n"
+            "均值 (Mean): 所有数据的算术平均值。\n"
+            "  公式: μ = Σxᵢ / n\n\n"
+            "标准差 (Std Dev): 数据离散程度的度量。\n"
+            "  公式: σ = √(Σ(xᵢ-μ)² / (n-1))   (样本标准差, ddof=1)\n\n"
+            "中位数 (Median): 排序后位于中间位置的值。\n"
+            "  不受极端值影响, 比均值更稳健。\n\n"
+            "分位数 (Quantile): 低于该值的数据所占百分比。\n"
+            "  例: 5%分位数表示有5%的数据小于该值。\n"
+            "  默认 Q_low=5%, Q_high=95%。\n"
+            "  可在数据控制面板自定义。\n\n"
+            "偏度 (Skewness): 数据分布不对称性的度量。\n"
+            "  > 0 右偏(长尾在右), < 0 左偏, = 0 对称。\n"
+            "  公式: γ₁ = (n/((n-1)(n-2))) * Σ((xᵢ-μ)/σ)³\n"
+            "  使用 scipy.stats.skew (Fisher-Pearson 标准化矩系数)\n\n"
+            "变异系数 (CV): 标准差与均值的比值, 消除量纲影响。\n"
+            "  公式: CV(%) = (σ / μ) × 100%\n"
+            "  用于比较不同量级数据的离散程度。\n\n"
+            "limit处F值: 在指定 limit 处的拟合 CDF 值 F(limit)。\n"
+            "  表示在 limit 值处的累积失效概率。\n"
+            "  依赖当前选择的分布模型和拟合参数。"
+        )
+        from tkinter import messagebox
+        messagebox.showinfo("统计信息计算方法", info, parent=self)
 
     # ==================== 清理 ====================
 

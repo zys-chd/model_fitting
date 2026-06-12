@@ -42,25 +42,33 @@ class StatCalculator(ABC):
 # ============================================================
 
 class BasicStatsCalculator(StatCalculator):
-    """基础描述性统计：count, mean, std, median, p5, p95, min, max"""
+    """基础描述性统计：count, mean, std, median, quantiles, min, max, skewness, CV"""
 
     KEY: ClassVar[str] = "basic"
     DISPLAY_ORDER: ClassVar[int] = 10
 
     def compute(self, samples: np.ndarray, **context) -> dict[str, Any]:
+        from scipy import stats as sp_stats
         s = np.asarray(samples)
         n = len(s)
         if n == 0:
             return {}
+        q_low = context.get("quantile_low", 5)
+        q_high = context.get("quantile_high", 95)
+        mean_v = float(np.mean(s))
+        std_v = float(np.std(s, ddof=1)) if n > 1 else 0.0
+        cv_pct = (std_v / mean_v * 100) if mean_v != 0 else float('nan')
         return {
             "样本数": n,
-            "均值": float(np.mean(s)),
-            "标准差": float(np.std(s, ddof=1)) if n > 1 else 0.0,
+            "均值": mean_v,
+            "标准差": std_v,
             "中位数": float(np.median(s)),
-            "5%分位数": float(np.percentile(s, 5)),
-            "95%分位数": float(np.percentile(s, 95)),
+            f"{q_low:.0f}%分位数": float(np.percentile(s, q_low)),
+            f"{q_high:.0f}%分位数": float(np.percentile(s, q_high)),
             "最小值": float(np.min(s)),
             "最大值": float(np.max(s)),
+            "偏度": float(sp_stats.skew(s)),
+            "变异系数(%)": round(cv_pct, 2),
         }
 
 

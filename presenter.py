@@ -50,6 +50,8 @@ class AppState:
         self.visibility: dict = {}  # {(col, group): {"scatter": bool, "curve": bool}}
         self.removed_points: dict = {}  # {col: [df_index, ...]} 显式跟踪去除点
         self.color_palette: str = "tab10"
+        self.quantile_low: float = 5.0
+        self.quantile_high: float = 95.0
 
 
 class FittingPresenter:
@@ -174,6 +176,14 @@ class FittingPresenter:
     def set_outlier_detector(self, key: str) -> None:
         self._state.current_outlier_key = key
 
+    def set_quantile_low(self, q: float) -> None:
+        self._state.quantile_low = q
+        self.update_all()
+
+    def set_quantile_high(self, q: float) -> None:
+        self._state.quantile_high = q
+        self.update_all()
+
     def set_x_scale(self, scale: str) -> None:
         self._state.x_scale = scale
         self._apply_scale_limits()
@@ -280,6 +290,8 @@ class FittingPresenter:
                     stats = self._stats_service.compute_all(
                         sub.values,
                         model=model, params=fit_result.params, limit=limit,
+                        quantile_low=self._state.quantile_low,
+                        quantile_high=self._state.quantile_high,
                     )
                     all_stats[key] = stats
 
@@ -363,6 +375,8 @@ class FittingPresenter:
                 stats = self._stats_service.compute_all(
                     sub.values,
                     model=model, params=fit_result.params, limit=limit,
+                    quantile_low=self._state.quantile_low,
+                    quantile_high=self._state.quantile_high,
                 )
                 all_stats[key] = stats
 
