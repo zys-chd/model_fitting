@@ -255,6 +255,7 @@ BasicStatsCalculator 默认计算以下指标（可在 UI 中筛选显示/隐藏
 | limit处F值 | 指定limit处的拟合CDF值 | F(limit) = CDF(limit; θ̂) |
 
 新增统计指标方法：继承 `StatCalculator`，实现 `compute()`，在 `STAT_REGISTRY` 注册。
+详见 [docs/add-statistic.md](add-statistic.md)。
 
 ## 配置文件关键常量
 

@@ -68,6 +68,7 @@ python launcher/pack.py
 |---|---|
 | [docs/add-model.md](docs/add-model.md) | 添加自定义分布模型 — 代码模板 + 注册步骤 |
 | [docs/architecture.md](docs/architecture.md) | 架构总览 — 模块职责、数据流、事件回调链、UI 布局 |
+| [docs/add-statistic.md](docs/add-statistic.md) | 添加自定义统计指标 — 3 步新增，含 context 参数速查 |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | 常见问题 — 拟合失败、打包异常、中文乱码等排查 |
 
 ---
