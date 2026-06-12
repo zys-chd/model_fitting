@@ -551,24 +551,8 @@ int main(int argc, char **argv) {
         }
     }
 
-    /* ── 5. 安装缺失依赖 ── */
+    /* ── 5. 安装缺失依赖（静默，不弹窗） ── */
     if (missing_count > 0) {
-        /* 提示用户 */
-        char msg_text[3072];
-        snprintf(msg_text, sizeof(msg_text),
-            "首次运行，需要安装以下依赖：\n\n"
-            "  %s\n\n"
-            "点击「确定」开始安装（需要网络连接）。",
-            missing);
-#ifdef _WIN32
-        int answer = MessageBoxA(NULL, msg_text, PROJECT_NAME " — 依赖安装",
-                                 MB_OKCANCEL | MB_ICONINFORMATION);
-        if (answer != IDOK) return 0;
-#else
-        /* macOS/Linux 用 osascript/zenity 询问 */
-        msgbox(PROJECT_NAME " — 依赖安装", msg_text);
-#endif
-
         if (pip_install(python, missing) != 0) {
             char err[1024];
             snprintf(err, sizeof(err),
@@ -607,10 +591,11 @@ int main(int argc, char **argv) {
 
 #ifdef _WIN32
     STARTUPINFOA si = {0}; PROCESS_INFORMATION pi = {0}; si.cb = sizeof(si);
-    if (CreateProcessA(NULL, cmd, NULL, NULL, FALSE, 0, NULL, g_temp_dir, &si, &pi)) {
-        WaitForSingleObject(pi.hProcess, INFINITE);
-        CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-    }
+    CreateProcessA(NULL, cmd, NULL, NULL, FALSE, 0, NULL, g_temp_dir, &si, &pi);
+    /* 不等待，直接退出 - Python 进程独立运行 */
+    if (pi.hProcess) CloseHandle(pi.hProcess);
+    if (pi.hThread) CloseHandle(pi.hThread);
+    _exit(0);  /* _exit 跳过 atexit cleanup，保留临时目录给 Python */
 #else
     int ret = system(cmd);
     (void)ret;
