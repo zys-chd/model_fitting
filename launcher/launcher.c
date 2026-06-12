@@ -420,7 +420,7 @@ static void sig_handler(int s) { (void)s; do_cleanup(); _exit(1); }
  * 依赖检查（全部在 C 层完成，不依赖 bootstrap.py）
  * ═══════════════════════════════════════════════════════ */
 
-/* 运行 python 命令，返回 exit code */
+/* 运行 python -c, 检查输出是否含 "Error"（不依赖 exit code） */
 static int run_py_cmd(const char *python, const char *py_code, char *out, size_t out_sz) {
     char cmd[4096];
     snprintf(cmd, sizeof(cmd), "\"%s\" -c \"%s\" 2>&1", python, py_code);
@@ -428,20 +428,23 @@ static int run_py_cmd(const char *python, const char *py_code, char *out, size_t
     if (!fp) return -1;
     if (out && out_sz > 0) {
         size_t n = fread(out, 1, out_sz - 1, fp);
-        if (n > 0) out[n] = '\0';
-        else out[0] = '\0';
+        if (n > 0) { out[n] = '\0'; } else { out[0] = '\0'; }
+    } else {
+        /* 即使不需要输出也读一下, 确保 pipe 关闭 */
+        char dummy[256];
+        fread(dummy, 1, sizeof(dummy), fp);
     }
-    int ret = pclose(fp);
-#ifdef _WIN32
-    return ret;
-#else
-    return WIFEXITED(ret) ? WEXITSTATUS(ret) : -1;
-#endif
+    pclose(fp);
+    /* 检查输出内容而不是 exit code */
+    if (out && out_sz > 0 && out[0] != '\0') {
+        if (strstr(out, "Error") || strstr(out, "Traceback")) return 1;
+    }
+    return 0;
 }
 
-/* 检查 pip 包是否已安装 */
+/* 检查 pip 包是否已安装（检查输出中有无 Error，不依赖 exit code） */
 static int check_package(const char *python, const char *import_name) {
-    char code[512], out[256] = {0};
+    char code[256], out[512] = {0};
     snprintf(code, sizeof(code), "import %s", import_name);
     return run_py_cmd(python, code, out, sizeof(out));
 }
