@@ -622,6 +622,19 @@ static int check_tkinter(const char *python) {
 
 int main(int argc, char **argv) {
 #ifdef _WIN32
+    /* ── 隐藏模式: --cleanup <tempdir> <pid> ── */
+    if (argc >= 4 && strcmp(argv[1], "--cleanup") == 0) {
+        DWORD pid = (DWORD)atoi(argv[3]);
+        HANDLE h = OpenProcess(SYNCHRONIZE, FALSE, pid);
+        if (h) {
+            WaitForSingleObject(h, INFINITE);
+            CloseHandle(h);
+        }
+        Sleep(500);  /* 等文件系统释放 */
+        remove_dir(argv[2]);
+        return 0;
+    }
+
     SetConsoleCtrlHandler(ctrl_handler, TRUE);
 #else
     signal(SIGINT, sig_handler);
@@ -764,6 +777,21 @@ int main(int argc, char **argv) {
     STARTUPINFOA si = {0}; PROCESS_INFORMATION pi = {0}; si.cb = sizeof(si);
     CreateProcessA(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW,
                    NULL, g_temp_dir, &si, &pi);
+
+    /* 起清理子进程: 等待 Python 退出后删除临时目录 */
+    {
+        char my_path[MAX_PATH_LEN];
+        GetModuleFileNameA(NULL, my_path, sizeof(my_path));
+        char cln_cmd[MAX_PATH_LEN + 256];
+        snprintf(cln_cmd, sizeof(cln_cmd), "\"%s\" --cleanup \"%s\" %lu",
+                 my_path, g_temp_dir, pi.dwProcessId);
+        STARTUPINFOA csi = {0}; PROCESS_INFORMATION cpi = {0}; csi.cb = sizeof(csi);
+        CreateProcessA(NULL, cln_cmd, NULL, NULL, FALSE,
+                       CREATE_NO_WINDOW, NULL, NULL, &csi, &cpi);
+        if (cpi.hProcess) CloseHandle(cpi.hProcess);
+        if (cpi.hThread) CloseHandle(cpi.hThread);
+    }
+
     if (pi.hProcess) CloseHandle(pi.hProcess);
     if (pi.hThread) CloseHandle(pi.hThread);
     _exit(0);
