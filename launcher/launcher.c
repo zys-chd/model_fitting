@@ -103,9 +103,10 @@
 #include "config.h"
 
 #ifdef _WIN32
-/* ── 状态提示窗口（Unicode, 白底居中） ── */
+/* ── 状态提示窗口（Unicode, 美观设计） ── */
 static HWND _stat_wnd = NULL;
-static HFONT _stat_font = NULL;
+static HFONT _stat_font = NULL, _stat_font_title = NULL;
+static HBRUSH _stat_bg = NULL;
 
 /* UTF-8 → WCHAR 辅助 */
 static WCHAR *utf8_to_w(const char *s) {
@@ -120,33 +121,53 @@ static WCHAR *utf8_to_w(const char *s) {
 static void show_status(const char *text) {
     WCHAR *wtext = utf8_to_w(text);
     if (_stat_wnd) {
-        if (wtext) { SetWindowTextW(GetDlgItem(_stat_wnd, 100), wtext); free(wtext); }
+        if (wtext) { SetWindowTextW(GetDlgItem(_stat_wnd, 101), wtext); free(wtext); }
         UpdateWindow(_stat_wnd);
         return;
     }
+    /* 创建背景画刷 (#F5F6FA) */
+    _stat_bg = CreateSolidBrush(RGB(0xF5, 0xF6, 0xFA));
+
     WCHAR *wtitle = utf8_to_w(PROJECT_NAME);
     WNDCLASSW wc = {0};
     wc.lpfnWndProc = DefWindowProcW;
     wc.hInstance = GetModuleHandle(NULL);
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    wc.hbrBackground = _stat_bg;
     wc.lpszClassName = L"MFStatusWnd";
     RegisterClassW(&wc);
 
     int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN);
+    int ww = 440, wh = 150;
     _stat_wnd = CreateWindowExW(WS_EX_TOOLWINDOW, L"MFStatusWnd",
         wtitle ? wtitle : L"", WS_POPUP | WS_BORDER,
-        (sw - 360)/2, (sh - 110)/2, 360, 110, NULL, NULL, wc.hInstance, NULL);
+        (sw - ww)/2, (sh - wh)/2, ww, wh, NULL, NULL, wc.hInstance, NULL);
     free(wtitle);
 
-    _stat_font = CreateFontW(15, 0, 0, 0, FW_NORMAL, 0, 0, 0,
+    /* 标题字体 14pt bold */
+    _stat_font_title = CreateFontW(18, 0, 0, 0, FW_SEMIBOLD, 0, 0, 0,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         DEFAULT_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei");
 
-    CreateWindowExW(0, L"STATIC", wtext ? wtext : L"", WS_CHILD | WS_VISIBLE | SS_CENTER,
-        10, 30, 340, 50, _stat_wnd, (HMENU)100, wc.hInstance, NULL);
-    SendMessageW(GetDlgItem(_stat_wnd, 100), WM_SETFONT, (WPARAM)_stat_font, TRUE);
+    /* 状态字体 20pt */
+    _stat_font = CreateFontW(24, 0, 0, 0, FW_NORMAL, 0, 0, 0,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        DEFAULT_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei");
+
+    /* 图标 — 🚀 */
+    CreateWindowExW(0, L"STATIC", L"\U0001F680", WS_CHILD | WS_VISIBLE | SS_CENTER,
+        20, 38, 50, 50, _stat_wnd, (HMENU)99, wc.hInstance, NULL);
+    SendMessageW(GetDlgItem(_stat_wnd, 99), WM_SETFONT, (WPARAM)_stat_font, TRUE);
+
+    /* 状态文字 */
+    CreateWindowExW(0, L"STATIC", wtext ? wtext : L"", WS_CHILD | WS_VISIBLE | SS_LEFT,
+        75, 42, ww - 95, 55, _stat_wnd, (HMENU)101, wc.hInstance, NULL);
+    SendMessageW(GetDlgItem(_stat_wnd, 101), WM_SETFONT, (WPARAM)_stat_font, TRUE);
     free(wtext);
+
+    /* 底部细线 */
+    CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_ETCHEDHORZ,
+        0, wh - 2, ww, 2, _stat_wnd, NULL, wc.hInstance, NULL);
 
     ShowWindow(_stat_wnd, SW_SHOW);
     UpdateWindow(_stat_wnd);
@@ -156,6 +177,8 @@ static void hide_status(void) {
     if (_stat_wnd) {
         DestroyWindow(_stat_wnd); _stat_wnd = NULL;
         if (_stat_font) { DeleteObject(_stat_font); _stat_font = NULL; }
+        if (_stat_font_title) { DeleteObject(_stat_font_title); _stat_font_title = NULL; }
+        if (_stat_bg) { DeleteObject(_stat_bg); _stat_bg = NULL; }
     }
 }
 
