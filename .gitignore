@@ -24,4 +24,4 @@ launcher/*.o
 launcher/build/
 
 # macOS resource forks
-._*
+._*launcher/cleanup.exe

@@ -141,10 +141,13 @@ int main(void) {
     closedir(d);
 #endif
 
+    printf("──────────────────────────────────\n");
     if (cleaned == 0) {
         printf("没有需要清理的文件。\n");
     } else {
-        printf("清理完成: %d 项\n", cleaned);
+        printf("已清理 %d 项。\n", cleaned);
     }
+    printf("\n按任意键关闭窗口...");
+    getchar();
     return 0;
 }
