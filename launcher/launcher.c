@@ -332,15 +332,20 @@ static int find_python(char *buf, size_t sz) {
     strncpy(tried_path, cand, sizeof(tried_path)); tried_path[sizeof(tried_path)-1] = '\0';
 
     /* 验证版本 */
+    /* 用 popen 代替 system(), sys.exit() 代替 exit() — 更可靠 */
     char code[512];
     snprintf(code, sizeof(code),
-             "\"%s\" -c \"import sys; exit(0 if sys.version_info[:2]>=("
-             STR(MIN_PYTHON_MAJOR) "," STR(MIN_PYTHON_MINOR) ") else 1)\" 2>nul",
-             cand);
-    int ret = system(code);
+             "\"%s\" -c \"import sys; sys.exit(0 if sys.version_info >= (%d,%d) else 1)\" 2>nul",
+             cand, MIN_PYTHON_MAJOR, MIN_PYTHON_MINOR);
+    FILE *fp = popen(code, "r");
+    if (!fp) goto version_fail;
+    char ver_out[64] = {0};
+    fread(ver_out, 1, sizeof(ver_out) - 1, fp);
+    int ret = pclose(fp);
     if (ret == 0) {
         strncpy(buf, cand, sz); buf[sz-1] = '\0'; return 0;
     }
+version_fail:
     /* 版本不足 — 把路径写入 buf 供调用方显示 */
     snprintf(buf, sz, "VERFAIL:%s", tried_path);
     return -1;

@@ -218,7 +218,7 @@ def generate_header(zip_data: bytes):
     lines.append("static const size_t resource_zip_size = sizeof(resource_zip);")
     lines.append("")
 
-    with open(output_path, "w") as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
     print(f"  生成: {output_path} ({output_path.stat().st_size / 1024:.0f} KB)")
