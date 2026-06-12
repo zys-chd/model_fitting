@@ -331,19 +331,34 @@ static int find_python(char *buf, size_t sz) {
     char tried_path[512];
     strncpy(tried_path, cand, sizeof(tried_path)); tried_path[sizeof(tried_path)-1] = '\0';
 
-    /* 验证版本 */
-    /* 用 popen 代替 system(), sys.exit() 代替 exit() — 更可靠 */
-    char code[512];
-    snprintf(code, sizeof(code),
-             "\"%s\" -c \"import sys; sys.exit(0 if sys.version_info >= (%d,%d) else 1)\" 2>nul",
-             cand, MIN_PYTHON_MAJOR, MIN_PYTHON_MINOR);
-    FILE *fp = popen(code, "r");
-    if (!fp) goto version_fail;
-    char ver_out[64] = {0};
-    fread(ver_out, 1, sizeof(ver_out) - 1, fp);
-    int ret = pclose(fp);
-    if (ret == 0) {
-        strncpy(buf, cand, sz); buf[sz-1] = '\0'; return 0;
+    /* 验证版本（写临时 .py 到 %TEMP% 执行） */
+    {
+        char tmp_dir[512];
+#ifdef _WIN32
+        const char *td = getenv("TEMP");
+        if (!td) td = getenv("TMP");
+        if (!td) td = "C:\\Windows\\Temp";
+#else
+        const char *td = getenv("TMPDIR");
+        if (!td) td = "/tmp";
+#endif
+        snprintf(tmp_dir, sizeof(tmp_dir), "%s", td);
+        char tmp_py[640];
+        snprintf(tmp_py, sizeof(tmp_py), "%s/_mf_verchk.py", tmp_dir);
+        FILE *f = fopen(tmp_py, "w");
+        if (f) {
+            fprintf(f, "import sys\n");
+            fprintf(f, "sys.exit(0 if sys.version_info >= (%d, %d) else 1)\n",
+                    MIN_PYTHON_MAJOR, MIN_PYTHON_MINOR);
+            fclose(f);
+            char cmd[768];
+            snprintf(cmd, sizeof(cmd), "\"%s\" \"%s\" 2>nul", cand, tmp_py);
+            int ret = system(cmd);
+            remove(tmp_py);
+            if (ret == 0) {
+                strncpy(buf, cand, sz); buf[sz-1] = '\0'; return 0;
+            }
+        }
     }
 version_fail:
     /* 版本不足 — 把路径写入 buf 供调用方显示 */
