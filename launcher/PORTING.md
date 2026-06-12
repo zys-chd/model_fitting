@@ -11,15 +11,19 @@
 ```
 用户双击 launcher.exe (无命令行窗口)
   │
-  ├─ 1. 检测系统 Python 版本
-  ├─ 2. 检测 tkinter（或你的 GUI 框架）
-  ├─ 3. 逐项检测 pip 依赖包
-  ├─ 4. 缺失 → 弹出对话框询问 → pip install
-  ├─ 5. 全部就绪 → 解压项目到临时目录 → 启动 Python App
-  └─ 6. App 退出 → 自动清理临时目录
+  ├─ 0. 检查标记文件 %TEMP%\_mf_env_ok → 存在则直接跳到步骤 6
+  ├─ 1. 查找系统 Python (py -3 → where python → 常见路径)
+  ├─ 2. 验证版本 (python --version → 解析 "Python 3.x.y")
+  ├─ 3. 解压内嵌 ZIP 到临时目录
+  ├─ 4. 检查 pip 依赖 (逐包, 显示进度窗口)
+  ├─ 5. 缺失 → 静默 pip install (无对话框)
+  ├─ 6. 全部就绪 → 用 pythonw.exe 启动 Python App
+  └─ 7. Launcher 立即退出 (临时目录保留给 Python 使用)
 ```
 
-所有步骤在 C 层完成，不依赖 Python 脚本做环境检测。启动后无命令行窗口（Windows）/无终端窗口（macOS），只有原生对话框。
+所有子进程使用 `CreateProcess + CREATE_NO_WINDOW`，无 cmd.exe 黑框。
+首次检查通过后写标记文件，后续启动跳过步骤 4-5，零弹窗直接进应用。
+环境检查失败时才弹 Unicode 对话框（MessageBoxW，UTF-8 中文无乱码）。
 
 ---
 
@@ -217,22 +221,18 @@ python launcher/pack.py
 
 ### Windows
 
-Windows 有两种方案：
-
-#### 方案 A: MinGW-w64（推荐，简单）
+#### 方案 A: MinGW-w64（推荐）
 
 ```powershell
-# 1. 下载 MinGW-w64: https://winlibs.com/
-#    选择 "GCC + LLVM/Clang" 版本
-#    解压到 C:\mingw64
+# 1. 安装 MinGW-w64（Dev-Cpp 自带, 或从 https://winlibs.com/ 下载）
+#    确保 gcc.exe 在 PATH 中
 
-# 2. 加入 PATH
-set PATH=C:\mingw64\bin;%PATH%
+# 2. 安装 zlib 开发文件到 MinGW 目录
+#    从 zlib.net 下载源码, 交叉编译或直接使用预编译包:
+#    将 zlib.h / zconf.h 复制到 MinGW/include/
+#    将 libz.a 复制到 MinGW/lib/
 
-# 3. 安装 zlib（MinGW 的包管理器）
-pacman -S mingw-w64-x86_64-zlib
-
-# 4. 打包
+# 3. 打包（pack.py 已支持 Windows MinGW）
 cd your-project
 python launcher\pack.py
 
@@ -242,39 +242,19 @@ python launcher\pack.py
 #### 方案 B: Visual Studio
 
 ```powershell
-# 1. 安装 Visual Studio Build Tools
-#    勾选 "C++ Build Tools" + "Windows SDK"
+# 1. 安装 Visual Studio Build Tools (C++ Build Tools + Windows SDK)
 
-# 2. 安装 zlib
-#    方式 a: vcpkg install zlib:x64-windows
-#    方式 b: 从 https://zlib.net/ 下载并编译 zlib.lib
+# 2. 安装 zlib: vcpkg install zlib:x64-windows
 
 # 3. 打开 "Developer Command Prompt for VS"
-
-# 4. 生成 resource.h（不需要编译器）
 cd your-project
-python launcher\pack.py --zip-only
+python launcher\pack.py
 
-# 5. 手动编译（/SUBSYSTEM:WINDOWS = 无命令行窗口）
-cl /O2 /DRESOURCE_H /I launcher launcher\launcher.c ^
-   /link /SUBSYSTEM:WINDOWS zlib.lib /OUT:launcher\your_tool.exe
+# pack.py 自动检测 cl.exe 并使用 MSVC 编译
 ```
 
-#### 无 zlib 的备选：使用 miniz
-
-如果不想折腾 zlib，可以用单头文件 `miniz`（公共域，zlib API 兼容）：
-
-```bash
-# 下载 miniz.h 到 launcher/
-curl -o launcher/miniz.h https://raw.githubusercontent.com/richgel999/miniz/master/miniz.h
-
-# 然后修改 launcher.c 顶部:
-#   #include <zlib.h>  →  #include "miniz.h"
-
-# 编译时去掉 -lz:
-#   gcc ... launcher.c -DRESOURCE_H -Ilauncher -mwindows   (MinGW)
-#   cl ... launcher.c /link /SUBSYSTEM:WINDOWS             (MSVC)
-```
+> **注意：** pack.py 已内置对 MSVC (`cl`) 和 MinGW (`gcc`) 的自动检测。
+> 所有子进程调用均使用 `CreateProcess(CREATE_NO_WINDOW)`，不依赖 shell 重定向语法（`2>&1` / `2>nul`），因此在两种编译器下行为一致。
 
 ---
 
@@ -293,17 +273,29 @@ curl -o launcher/miniz.h https://raw.githubusercontent.com/richgel999/miniz/mast
 
 **Q: 用户没有安装 Python 怎么办？**
 
-弹出原生对话框，显示 `PROJECT_URL` 指向的 Python 下载页面。
+弹出 Unicode 对话框，显示找到的路径和版本号，以及 Python 下载页面链接。
 
 **Q: pip install 失败了？**
 
 弹出对话框显示失败原因（通常是网络问题），提示手动安装命令。
+首次安装是静默的，不弹确认框。只有失败时才弹错误提示。
+
+**Q: 依赖安装后每次启动还是会检查吗？**
+
+不会。首次检查全部通过后，写入标记文件 `%TEMP%\_mf_env_ok`（Windows）或 `/tmp/_mf_env_ok`（macOS/Linux）。
+后续启动直接跳过环境检查，零弹窗。如需重新检查，删除该文件即可。
+
+**Q: 为什么启动 Python 后没有控制台黑框？**
+
+Windows 上 launcher 使用 `pythonw.exe`（GUI 子系统）启动应用，配合 `CREATE_NO_WINDOW` 标志。
+所有子进程（`py -3`、`pip install` 等）均通过 `CreateProcess(CREATE_NO_WINDOW)` 执行，不闪 cmd 窗口。
 
 **Q: 依赖列表里的包版本约束怎么写？**
 
 ```c
 {"numpy", "numpy", ">=2.0"},
 ```
+
 C 层只检查包是否可 import，不检查版本号。版本约束传给 `pip install` 使用。
 
 **Q: 我的包名和 import 名不一样怎么办？**
@@ -320,41 +312,38 @@ C 层只检查包是否可 import，不检查版本号。版本约束传给 `pip
 
 bootstrap.py 里用 `sys.argv` 分发，支持 `--legacy` 之类的标志切换启动方式。
 
-**Q: 怎么在 Windows 上编译？**
-
-```cmd
-:: Visual Studio
-cl /O2 launcher.c zlib.lib /link /SUBSYSTEM:WINDOWS
-
-:: MinGW-w64
-gcc -O2 -o my_tool.exe launcher.c -lz -mwindows
-```
-
-pack.py 暂时只支持 macOS/Linux 的 clang/gcc。Windows 编译需要手动操作或改写 pack.py。
-
 ---
 
 ## 架构总览
 
 ```
-launcher.c (C, ~550 行)
+launcher.c (C, ~700 行)
   │
-  ├─ msgbox()           → 原生对话框 (Win: MessageBox, Mac: osascript, Linux: zenity)
-  ├─ extract_zip()      → 零依赖 ZIP 解压 (zlib DEFLATE)
-  ├─ check_tkinter()    → python3 -c "import tkinter"
-  ├─ check_package()    → python3 -c "import numpy" (逐项)
-  ├─ pip_install()      → python3 -m pip install ...
+  ├─ win_msgbox()        → Unicode 对话框 (MessageBoxW, UTF-8 无乱码)
+  ├─ show_status()       → 进度窗口 (CreateWindowExW, 🚀 + 大字体)
+  ├─ extract_zip()       → 零依赖 ZIP 解压 (zlib DEFLATE)
+  ├─ find_python()       → py -3 → where → 常见路径, 内嵌 --version 验证
+  ├─ check_package()     → python -c "import X", 检查输出中是否有 Error
+  ├─ pip_install()       → python -m pip install (静默, 无确认框)
+  │
+  ├─ spopen() / ssys()   → CreateProcess + CREATE_NO_WINDOW (替代 popen/system)
+  ├─ pump_messages()     → PeekMessage 保持状态窗口响应
+  │
   └─ main()
        │
-       ├─ Python 检查 → 版本检查 → temp 解压
-       ├─ tkinter 检查 → pip 逐项检查 → 安装 → 验证
-       └─ 启动 python3 bootstrap.py [args]
+       ├─ 标记文件检查 → 存在则跳过环境检查
+       ├─ Python 查找 + 版本验证
+       ├─ 临时目录解压
+       ├─ pip 逐包检查 (显示 "正在检查 X (N/M)...")
+       ├─ 缺失 → 静默安装 → 显示 "正在安装依赖..."
+       ├─ 通过 → 写标记文件 %TEMP%\_mf_env_ok
+       └─ 用 pythonw.exe 启动 bootstrap.py → _exit(0) 退出
 
 config.h (项目配置)
   ├─ 项目名 / 版本 / ZIP 前缀
-  ├─ Python 版本要求
-  ├─ 依赖包列表 (REQUIREMENTS[])
-  └─ tkinter 各平台安装提示
+  ├─ Python 版本要求 (MIN_PYTHON_MAJOR/MINOR)
+  ├─ 依赖包列表 (REQUIREMENTS[] — import_name / pip_name / min_version)
+  └─ tkinter 各平台安装提示 (仅 macOS/Linux 检查)
 
 bootstrap.py (项目根目录, Python)
   └─ sys.path 设置 → import 项目包 → 启动入口
@@ -363,5 +352,6 @@ pack.py (打包脚本, Python)
   ├─ 读取 config.h 获取 ZIP_PREFIX
   ├─ ZIP 项目文件 (排除 .git/__pycache__/launcher/)
   ├─ 生成 resource.h (C 数组)
-  └─ 编译 launcher.c
+  ├─ 自动检测编译器 (cl.exe 或 gcc)
+  └─ 编译 launcher.c + 链接 zlib → 输出 exe
 ```

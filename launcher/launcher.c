@@ -2,11 +2,11 @@
  * launcher.c — 通用 Python 项目 C 启动器
  *
  * 将 Python 项目 ZIP 嵌入二进制，运行时：
- *   1. 检测系统 Python 环境
- *   2. 逐项检查依赖（tkinter + pip 包）
- *   3. 缺失则自动安装
- *   4. 启动 Python 主程序
- *   5. 退出时清理临时目录
+ *   0. 检查标记文件 → 已通过则直接启动
+ *   1. 查找系统 Python 并验证版本
+ *   2. 解压项目到临时目录
+ *   3. 首次运行: 逐项检查 pip 依赖 + 静默安装 + 写标记文件
+ *   4. 启动 Python 主程序（pythonw.exe, 无控制台）
  *
  * 移植到新项目：只需修改 config.h
  * 编译：python pack.py

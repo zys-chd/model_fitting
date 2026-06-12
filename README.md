@@ -27,31 +27,29 @@ pip install -r requirements.txt
 ## 快速开始
 
 ```bash
-# 直接运行
-python model_fitting_app.py
+# 安装依赖
+pip install -r requirements.txt
 
-# 带 CSV 参数
+# 启动（新版 UI）
+python run.py
+
+# 启动（经典 tkinter 模式）
+python run.py --classic
+
+# 带 CSV 数据启动
 python run.py data.csv
-
-# 作为模块调用
-python -c "from model_fitting_app import launch; launch(csv_path='data.csv')"
 ```
 
-**代码调用：**
+### 打包为独立 exe
 
-```python
-from model_fitting_app import launch, Model_Fitting_App
-import pandas as pd
+使用内置 C Launcher，打包为 ~700KB 独立二进制文件（不需预装 Python）：
 
-# 方式1：launch() + DataFrame
-launch(dataframe=pd.read_csv("data.csv"))
-
-# 方式2：launch() + CSV 路径
-launch(csv_path="data.csv")
-
-# 方式3：嵌入到其他 tkinter 窗口
-app = Model_Fitting_App(parent=my_tk_window, dataframe=df)
+```bash
+python launcher/pack.py
+# 输出: launcher/模型拟合工具.exe
 ```
+
+详见 [launcher/PORTING.md](launcher/PORTING.md)
 
 ---
 
@@ -75,30 +73,34 @@ app = Model_Fitting_App(parent=my_tk_window, dataframe=df)
 
 ```
 model_fitting/
-├── model_fitting_app.py   # 主窗口 + launch() 入口
-├── run.py                 # CLI 入口
+├── run.py                 # 主入口
+├── bootstrap.py           # C Launcher 入口
 ├── config.py              # 全局配置（字体、颜色、模型注册表）
-├── utils.py               # 工具函数（列检测、测试数据生成）
+├── presenter.py           # MVP Presenter 层
+├── utils.py               # 工具函数
 ├── widgets.py             # 可复用 UI 组件（SeriesSelector）
 ├── VERSION                # 版本号文件
 ├── requirements.txt       # 依赖
+├── build.bat              # PyInstaller 打包脚本
 ├── README.md
-├── docs/
-│   ├── add-model.md       # 添加自定义模型指南
-│   ├── architecture.md    # 架构总览
-│   └── troubleshooting.md # 常见问题
-├── models/
-│   ├── __init__.py        # 模型注册中心
-│   ├── base.py            # 抽象基类 DistributionModel
-│   ├── weibull.py         # Weibull-2P
-│   ├── weibull3p.py       # Weibull-3P
-│   ├── exponential.py     # Exponential
-│   ├── lognormal.py       # Lognormal
-│   ├── normal.py          # Normal
-│   ├── gamma.py           # Gamma
-│   ├── loglogistic.py     # Log-Logistic
-│   ├── gumbel.py          # Gumbel
-│   └── birnbaum_saunders.py  # Birnbaum-Saunders
+├── launcher/              # C Launcher 打包工具
+│   ├── config.h           # 项目配置
+│   ├── launcher.c         # C 启动器源码
+│   ├── pack.py            # 打包脚本
+│   └── PORTING.md         # 移植文档
+├── core/                  # 核心层
+├── ui/                    # UI 层
+│   ├── app_window.py      # 主窗口
+│   └── widgets/           # UI 组件
+│       ├── style_config_dialog.py
+│       ├── data_workbook.py
+│       ├── import_dialog.py
+│       └── series_selector.py
+├── models/                # 9 种分布模型
+├── services/              # 业务服务层
+├── plotting/              # 绘图层
+├── docs/                  # 文档
+├── tests/                 # 测试
 └── log/                   # 运行日志
 ```
 
