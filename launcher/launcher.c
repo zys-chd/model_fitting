@@ -343,14 +343,14 @@ static int find_python(char *buf, size_t sz) {
     int have_cand = 0;
 
     /* 1. py 启动器 */
-    { FILE *fp = popen("py -3 -c \"import sys; print(sys.executable, end='')\" 2>nul", "r");
+    { FILE *fp = popen("py -3 -c \"import sys; print(sys.executable, end='')\"", "r");
       if (fp) { if (fgets(cand, sizeof(cand), fp)) {
           size_t l = strlen(cand); while (l>0 && (cand[l-1]=='\n'||cand[l-1]=='\r')) cand[--l]=0;
           if (l>0 && access(cand, F_OK)==0) have_cand=1;
       } pclose(fp); } }
 
-    /* 2. where python */
-    if (!have_cand) { FILE *fp = popen("where python 2>nul", "r");
+    /* 2. where python (cmd 内置命令，必须通过 cmd.exe /c) */
+    if (!have_cand) { FILE *fp = popen("cmd.exe /c \"where python\"", "r");
       if (fp) { if (fgets(cand, sizeof(cand), fp)) {
           size_t l = strlen(cand); while (l>0 && (cand[l-1]=='\n'||cand[l-1]=='\r')) cand[--l]=0;
           if (l>0 && access(cand, F_OK)==0) have_cand=1;
@@ -368,7 +368,7 @@ static int find_python(char *buf, size_t sz) {
     if (!have_cand) return -1;
 
     /* 验证版本: python --version → 解析 "Python 3.x.y" */
-    { char cmd[640]; snprintf(cmd, sizeof(cmd), "\"%s\" --version 2>&1", cand);
+    { char cmd[640]; snprintf(cmd, sizeof(cmd), "\"%s\" --version", cand);
       FILE *fp = popen(cmd, "r");
       if (fp) {
           char ver[64]={0}; fread(ver,1,sizeof(ver)-1,fp); pclose(fp);
@@ -483,7 +483,7 @@ static void sig_handler(int s) { (void)s; do_cleanup(); _exit(1); }
 /* 运行 python -c, 检查输出是否含 "Error"（不依赖 exit code） */
 static int run_py_cmd(const char *python, const char *py_code, char *out, size_t out_sz) {
     char cmd[4096];
-    snprintf(cmd, sizeof(cmd), "\"%s\" -c \"%s\" 2>&1", python, py_code);
+    snprintf(cmd, sizeof(cmd), "\"%s\" -c \"%s\"", python, py_code);
     FILE *fp = popen(cmd, "r");
     if (!fp) return -1;
     if (out && out_sz > 0) {
@@ -513,14 +513,9 @@ static int check_package(const char *python, const char *import_name) {
 static int pip_install(const char *python, const char *packages) {
     char cmd[4096];
     snprintf(cmd, sizeof(cmd),
-             "\"%s\" -m pip install --quiet --disable-pip-version-check %s 2>&1",
+             "\"%s\" -m pip install --quiet --disable-pip-version-check %s",
              python, packages);
-    int ret = system(cmd);
-#ifdef _WIN32
-    return ret;
-#else
-    return WIFEXITED(ret) ? WEXITSTATUS(ret) : -1;
-#endif
+    return system(cmd);
 }
 
 /* 检查 Python 版本 */
