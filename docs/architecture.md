@@ -24,7 +24,6 @@
 ```
 model_fitting/
 ├── presenter.py              # 🎯 MVP Presenter — 核心协调器（纯 Python）
-├── model_fitting_app.py      # 🔄 旧版窗口（向后兼容，保留）
 ├── config.py                 # ⚙️ 全局常量
 ├── utils.py                  # 🔧 工具函数
 │
@@ -35,11 +34,11 @@ model_fitting/
 │   ├── export_service.py     # 导出逻辑
 │   │
 │   ├── transform_registry.py       # 🧩 变换模式策略（CDF / lnln）
-│   ├── stat_registry.py            # 🧩 统计指标计算器
+│   ├── stat_registry.py            # 🧩 统计指标计算器（BasicStats: 分位数/偏度/CV/IQR）
 │   ├── file_handler_registry.py    # 🧩 文件格式处理器
 │   ├── outlier_registry.py         # 🧩 离群检测策略
 │   ├── cdf_estimator_registry.py   # 🧩 经验 CDF 估计器
-│   └── export_handler_registry.py  # 🧩 导出格式处理器
+│   └── export_handler_registry.py  # 🧩 导出格式处理器（Excel/CSV/JSON）
 │
 ├── plotting/                 # 🎨 绘图层（依赖 matplotlib，不依赖 tkinter）
 │   ├── plot_data.py          # FitResult / PlotSpec / SeriesPlotData dataclass
@@ -48,7 +47,17 @@ model_fitting/
 ├── ui/                       # 🖥️ 视图层（依赖 tkinter）
 │   ├── app_window.py         # AppWindow 主窗口（实现 AppViewProtocol）
 │   └── widgets/
-│       └── series_selector.py # SeriesSelector 组件
+│       ├── series_selector.py     # SeriesSelector 组件（列选择+样式）
+│       ├── style_config_dialog.py # 样式配置弹窗（颜色/marker/linestyle/透明度）
+│       ├── data_workbook.py       # 数据工作簿独立窗口
+│       └── import_dialog.py       # 数据导入对话框
+│
+├── launcher/                 # 📦 C Launcher 打包工具
+│   ├── config.h              # 项目配置（名称/依赖/版本要求）
+│   ├── launcher.c            # C 启动器源码（~700行）
+│   ├── pack.py               # 打包脚本（ZIP嵌入+编译）
+│   ├── cleanup.c             # 临时文件清理工具
+│   └── PORTING.md            # 移植文档
 │
 ├── models/                   # 📊 分布模型（ABC + 策略模式）
 │   ├── base.py               # DistributionModel ABC（含 @abstractmethod）
@@ -86,10 +95,13 @@ model_fitting/
 1. View.get_selected_columns() → [(idx, col_name), ...]
 2. View.get_series_styles() → [{marker, linestyle, limit}, ...]
 3. FittingService.fit_single(samples, model_key) → FitResult
-4. StatsService.compute_all(samples, ...) → stats dict
+4. StatsService.compute_all(samples, quantile_low/high, ...) → stats dict
 5. PlotManager.build_figure(PlotSpec) → matplotlib Figure
 6. View.display_plot(figure) → 嵌入 TkAgg 画布
-7. View.display_stats(data) → 更新统计树
+7. View.display_stats(data) → 更新统计树（含 visible_stats 过滤）
+
+轻量刷新（refresh_stats_only）：
+  分位数变更/统计筛选时，仅重算统计+刷新树，不重拟合不重绘
 ```
 
 ## 类层次
@@ -200,11 +212,14 @@ Selector 样式变更     →  _on_style_change      →  update_plot
 统计树点击 checkbox    →  _on_tree_click       →  _apply_visibility → 重绘图例
 绘图区单击选点         →  on_pick              →  _highlight_selected（高亮）
 绘图区双击             →  on_dbl               →  _show_popup（弹窗）
+分位数 Entry 变更      →  _on_quantile_change  →  refresh_stats_only（轻量）
+统计筛选 Combo 选择    →  _on_stat_filter_toggle → toggle_stat_visibility → 轻量
+导出勾选"仅导出显示项"  →  _on_export_parameters →  visible_stats 过滤导出列
 ```
 
 ## 多实例机制
 
-`Model_Fitting_App` 继承 `tk.Toplevel`，天然支持多窗口：
+`AppWindow` 继承 `tk.Toplevel`，天然支持多窗口：
 
 - 通过全局计数器 `_max_instance_id` + 释放池 `_freed_instance_ids` 管理实例 ID
 - 每个实例独立日志文件：`log/model_fitting_XXX.log`
@@ -220,6 +235,26 @@ Selector 样式变更     →  _on_style_change      →  update_plot
 | 事件循环 | 共享宿主 mainloop | `app._tk_root.mainloop()`（阻塞） |
 | 关闭行为 | `self.destroy()` | `self._tk_root.quit()` + `destroy()` |
 | 图标设置 | `self.winfo_toplevel()` | `self._tk_root` |
+
+## 统计指标说明
+
+BasicStatsCalculator 默认计算以下指标（可在 UI 中筛选显示/隐藏）：
+
+| 指标 | 说明 | 公式 |
+|------|------|------|
+| 样本数 | 有效数据点个数 | n |
+| 均值 | 算术平均值 | μ = Σxᵢ/n |
+| 标准差 | 离散程度（样本标准差 ddof=1） | σ = √(Σ(xᵢ-μ)²/(n-1)) |
+| 中位数 | 排序后中间值，抗极端值 | - |
+| X%分位数 | 自定义分位数（默认5%/95%） | percentile(s, q) |
+| 分位数间距 | Q_high - Q_low (IQR) | - |
+| 相对分位数间距 | 消除量纲的 IQR | (Q_high-Q_low)/μ |
+| 最小值/最大值 | 极值 | min(s), max(s) |
+| 偏度 | 不对称性（scipy.stats.skew） | γ₁ = (n/((n-1)(n-2)))·Σ((xᵢ-μ)/σ)³ |
+| 变异系数(%) | 相对离散程度 | CV = (σ/μ)×100% |
+| limit处F值 | 指定limit处的拟合CDF值 | F(limit) = CDF(limit; θ̂) |
+
+新增统计指标方法：继承 `StatCalculator`，实现 `compute()`，在 `STAT_REGISTRY` 注册。
 
 ## 配置文件关键常量
 
