@@ -178,11 +178,38 @@ class FittingPresenter:
 
     def set_quantile_low(self, q: float) -> None:
         self._state.quantile_low = q
-        self.update_all()
+        self.refresh_stats_only()
 
     def set_quantile_high(self, q: float) -> None:
         self._state.quantile_high = q
-        self.update_all()
+        self.refresh_stats_only()
+
+    def refresh_stats_only(self):
+        """仅重算统计信息并刷新 stats 树，不重拟合不重绘"""
+        if not self._state.fit_results or not self._state.data is not None:
+            return
+        from models import MODEL_INSTANCES
+        model = MODEL_INSTANCES.get(self._state.current_model_key)
+        if model is None:
+            return
+        all_stats = {}
+        for (col_name, g), (mn, params, r2, xs, cdf) in self._state.fit_results.items():
+            if g != "All" and self._state.group_column and self._state.group_column in self._state.data.columns:
+                mask = self._state.data[self._state.group_column] == g
+                samples = self._state.data.loc[mask, col_name].dropna()
+            else:
+                samples = self._state.data[col_name].dropna()
+            si = next((meta["selector_idx"] for meta in self._state.series_meta
+                       if meta["col"] == col_name and meta.get("group") == g), 0)
+            limit = self._view.get_limits()[si] if si < len(self._view.get_limits()) else 0.1
+            all_stats[(col_name, g)] = self._stats_service.compute_all(
+                samples.values, model=model, params=params, limit=limit,
+                quantile_low=self._state.quantile_low,
+                quantile_high=self._state.quantile_high,
+            )
+        self._state.stats_cache = all_stats
+        tree_data = self._build_stats_tree_data(self._state.fit_results, all_stats)
+        self._view.display_stats(tree_data)
 
     def set_x_scale(self, scale: str) -> None:
         self._state.x_scale = scale

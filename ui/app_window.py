@@ -625,6 +625,21 @@ class AppWindow(tk.Toplevel):
         r += 1
         ttk.Button(c, text="添加列", command=self.add_selector).grid(row=r, column=0, sticky="w", padx=1)
         ttk.Button(c, text="移除列", command=self.remove_last).grid(row=r, column=1, sticky="w", padx=1)
+
+        # 分位数 Entry（同行）
+        self._tk_vars["quantile_low"] = tk.StringVar(value="5")
+        self._tk_vars["quantile_high"] = tk.StringVar(value="95")
+        ttk.Label(c, text=" 分位数:").grid(row=r, column=2, sticky="e", padx=(4, 0))
+        self._q_low_entry = ttk.Entry(c, textvariable=self._tk_vars["quantile_low"], width=5)
+        self._q_low_entry.grid(row=r, column=2, sticky="e", padx=(55, 0))
+        self._q_low_entry.bind("<FocusOut>", self._on_quantile_change)
+        self._q_low_entry.bind("<Return>", self._on_quantile_change)
+        ttk.Label(c, text="~").grid(row=r, column=3, sticky="w")
+        self._q_high_entry = ttk.Entry(c, textvariable=self._tk_vars["quantile_high"], width=5)
+        self._q_high_entry.grid(row=r, column=3, sticky="w", padx=(12, 0))
+        self._q_high_entry.bind("<FocusOut>", self._on_quantile_change)
+        self._q_high_entry.bind("<Return>", self._on_quantile_change)
+        ttk.Label(c, text="%").grid(row=r, column=3, sticky="w", padx=(48, 0))
         r += 1
 
         ttk.Checkbutton(c, text="仅保留 _shift 列", variable=self._filter_shift_only,
@@ -633,22 +648,6 @@ class AppWindow(tk.Toplevel):
         r += 1
 
         LW = 5
-        # 自定义分位数
-        self._tk_vars["quantile_low"] = tk.StringVar(value="5")
-        self._tk_vars["quantile_high"] = tk.StringVar(value="95")
-        ttk.Label(c, text="分位数:", width=LW).grid(row=r, column=0, sticky="e")
-        self._q_low_entry = ttk.Entry(c, textvariable=self._tk_vars["quantile_low"], width=5)
-        self._q_low_entry.grid(row=r, column=1, sticky="w")
-        self._q_low_entry.bind("<FocusOut>", self._on_quantile_change)
-        self._q_low_entry.bind("<Return>", self._on_quantile_change)
-        ttk.Label(c, text="~").grid(row=r, column=2, sticky="w")
-        self._q_high_entry = ttk.Entry(c, textvariable=self._tk_vars["quantile_high"], width=5)
-        self._q_high_entry.grid(row=r, column=2, sticky="e", padx=(20, 0))
-        self._q_high_entry.bind("<FocusOut>", self._on_quantile_change)
-        self._q_high_entry.bind("<Return>", self._on_quantile_change)
-        ttk.Label(c, text="%").grid(row=r, column=3, sticky="w")
-        r += 1
-
         ttk.Label(c, text="模型：", width=LW, anchor="e").grid(row=r, column=0, sticky="e")
         mc = ttk.Combobox(c, textvariable=self._tk_vars.get("model", tk.StringVar(value=MODEL_DISPLAY[0])),
                           values=MODEL_DISPLAY, state="readonly", width=24)
@@ -1349,33 +1348,55 @@ class AppWindow(tk.Toplevel):
             pass
 
     def _show_stats_info(self):
+        top = tk.Toplevel(self)
+        top.title("统计信息计算方法")
+        top.geometry("540x500")
+        top.resizable(True, True)
+
+        text = tk.Text(top, wrap=tk.WORD, font=("Microsoft YaHei", 10),
+                       padx=12, pady=10, relief=tk.FLAT, bg="#f5f5f5")
         info = (
-            "统计信息计算方法说明\n"
-            "──────────────────────────\n\n"
-            "样本数 (n): 参与计算的有效数据点个数。\n\n"
-            "均值 (Mean): 所有数据的算术平均值。\n"
-            "  公式: μ = Σxᵢ / n\n\n"
-            "标准差 (Std Dev): 数据离散程度的度量。\n"
+            "样本数 (n)\n"
+            "  参与计算的有效数据点个数。\n\n"
+            "均值 (Mean)\n"
+            "  所有数据的算术平均值。公式: μ = Σxᵢ / n\n\n"
+            "标准差 (Std Dev)\n"
+            "  数据离散程度的度量。\n"
             "  公式: σ = √(Σ(xᵢ-μ)² / (n-1))   (样本标准差, ddof=1)\n\n"
-            "中位数 (Median): 排序后位于中间位置的值。\n"
-            "  不受极端值影响, 比均值更稳健。\n\n"
-            "分位数 (Quantile): 低于该值的数据所占百分比。\n"
+            "中位数 (Median)\n"
+            "  排序后位于中间位置的值。不受极端值影响, 比均值更稳健。\n\n"
+            "分位数 (Quantile)\n"
+            "  低于该值的数据所占百分比。\n"
             "  例: 5%分位数表示有5%的数据小于该值。\n"
-            "  默认 Q_low=5%, Q_high=95%。\n"
-            "  可在数据控制面板自定义。\n\n"
-            "偏度 (Skewness): 数据分布不对称性的度量。\n"
+            "  默认 Q_low=5%, Q_high=95%，可在数据控制面板自定义。\n\n"
+            "偏度 (Skewness)\n"
+            "  数据分布不对称性的度量。\n"
             "  > 0 右偏(长尾在右), < 0 左偏, = 0 对称。\n"
-            "  公式: γ₁ = (n/((n-1)(n-2))) * Σ((xᵢ-μ)/σ)³\n"
+            "  公式: γ₁ = (n/((n-1)(n-2))) × Σ((xᵢ-μ)/σ)³\n"
             "  使用 scipy.stats.skew (Fisher-Pearson 标准化矩系数)\n\n"
-            "变异系数 (CV): 标准差与均值的比值, 消除量纲影响。\n"
+            "变异系数 (Coefficient of Variation, CV)\n"
+            "  标准差与均值的比值, 消除量纲影响。\n"
             "  公式: CV(%) = (σ / μ) × 100%\n"
-            "  用于比较不同量级数据的离散程度。\n\n"
-            "limit处F值: 在指定 limit 处的拟合 CDF 值 F(limit)。\n"
+            "  用于比较不同量级数据的离散程度。\n"
+            "  CV 越小表示数据越集中, 越大表示越分散。\n\n"
+            "最小值 / 最大值\n"
+            "  数据集中的最小值和最大值。\n\n"
+            "limit处F值\n"
+            "  在指定 limit 处的拟合 CDF 值 F(limit)。\n"
             "  表示在 limit 值处的累积失效概率。\n"
             "  依赖当前选择的分布模型和拟合参数。"
         )
-        from tkinter import messagebox
-        messagebox.showinfo("统计信息计算方法", info, parent=self)
+        text.insert(tk.END, info)
+        text.config(state=tk.DISABLED)
+        scroll = ttk.Scrollbar(top, orient=tk.VERTICAL, command=text.yview)
+        text.configure(yscrollcommand=scroll.set)
+        text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(10, 0), pady=(10, 10))
+        scroll.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 10), pady=(10, 10))
+
+        # 鼠标滚轮支持
+        def _on_mousewheel(event):
+            text.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        text.bind("<MouseWheel>", _on_mousewheel)
 
     # ==================== 清理 ====================
 
