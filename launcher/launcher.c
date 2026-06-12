@@ -490,6 +490,20 @@ int main(int argc, char **argv) {
 #endif
     atexit(do_cleanup);
 
+    /* ── 0. 快速路径：已通过首次检查则直接启动 ── */
+    char stamp_path[MAX_PATH_LEN];
+    {
+        const char *td = getenv("TEMP");
+        if (!td) td = getenv("TMP");
+#ifdef _WIN32
+        if (!td) td = "C:\\Windows\\Temp";
+#else
+        if (!td) td = "/tmp";
+#endif
+        snprintf(stamp_path, sizeof(stamp_path), "%s/_mf_env_ok", td);
+    }
+    int is_first_run = (access(stamp_path, F_OK) != 0);
+
     /* ── 1. 查找 Python（含版本验证） ── */
     char python[MAX_PATH_LEN] = {0};
     if (find_python(python, sizeof(python)) != 0) {
@@ -524,56 +538,58 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* ── 3. 检查 tkinter（仅 macOS/Linux, Windows 自带） ── */
+    /* ── 3-5. 环境检查（仅首次运行） ── */
+    if (is_first_run) {
 #ifndef _WIN32
-    if (check_tkinter(python) != 0) {
+        if (check_tkinter(python) != 0) {
 #if defined(__APPLE__)
-        const char *guide = TKINTER_MAC_MSG;
+            const char *guide = TKINTER_MAC_MSG;
 #else
-        const char *guide = TKINTER_LINUX_MSG;
+            const char *guide = TKINTER_LINUX_MSG;
 #endif
-        char msg[1024];
-        snprintf(msg, sizeof(msg),
-            "缺少 tkinter 组件。\n\n%s", guide);
-        msgbox_error(PROJECT_NAME, msg);
-        return 1;
-    }
-#endif
-
-    /* ── 4. 检查 pip 依赖 ── */
-    char missing[2048] = {0};
-    int missing_count = 0;
-    for (int i = 0; i < REQUIREMENTS_COUNT; i++) {
-        if (check_package(python, REQUIREMENTS[i].import_name) != 0) {
-            if (missing_count > 0) strcat(missing, " ");
-            strcat(missing, REQUIREMENTS[i].pip_name);
-            missing_count++;
-        }
-    }
-
-    /* ── 5. 安装缺失依赖（静默，不弹窗） ── */
-    if (missing_count > 0) {
-        if (pip_install(python, missing) != 0) {
-            char err[1024];
-            snprintf(err, sizeof(err),
-                "依赖安装失败。\n\n"
-                "请手动运行以下命令后重试：\n"
-                "  pip install %s", missing);
-            msgbox_error(PROJECT_NAME, err);
+            char msg[1024];
+            snprintf(msg, sizeof(msg),
+                "缺少 tkinter 组件。\n\n%s", guide);
+            msgbox_error(PROJECT_NAME, msg);
             return 1;
         }
+#endif
 
-        /* 验证安装 */
-        int still_missing = 0;
+        char missing[2048] = {0};
+        int missing_count = 0;
         for (int i = 0; i < REQUIREMENTS_COUNT; i++) {
-            if (check_package(python, REQUIREMENTS[i].import_name) != 0)
-                still_missing++;
+            if (check_package(python, REQUIREMENTS[i].import_name) != 0) {
+                if (missing_count > 0) strcat(missing, " ");
+                strcat(missing, REQUIREMENTS[i].pip_name);
+                missing_count++;
+            }
         }
-        if (still_missing > 0) {
-            msgbox_error(PROJECT_NAME,
-                "部分依赖安装后仍不可用。\n请检查网络连接后重试。");
-            return 1;
+
+        if (missing_count > 0) {
+            if (pip_install(python, missing) != 0) {
+                char err[1024];
+                snprintf(err, sizeof(err),
+                    "依赖安装失败。\n\n"
+                    "请手动运行以下命令后重试：\n"
+                    "  pip install %s", missing);
+                msgbox_error(PROJECT_NAME, err);
+                return 1;
+            }
+            int still_missing = 0;
+            for (int i = 0; i < REQUIREMENTS_COUNT; i++) {
+                if (check_package(python, REQUIREMENTS[i].import_name) != 0)
+                    still_missing++;
+            }
+            if (still_missing > 0) {
+                msgbox_error(PROJECT_NAME,
+                    "部分依赖安装后仍不可用。\n请检查网络连接后重试。");
+                return 1;
+            }
         }
+
+        /* 首次检查通过，写标记文件 */
+        FILE *sf = fopen(stamp_path, "w");
+        if (sf) { fprintf(sf, "ok\n"); fclose(sf); }
     }
 
     /* ── 6. 启动应用 ── */
