@@ -327,8 +327,12 @@ static int find_python(char *buf, size_t sz) {
 
     if (!have_cand) return -1;
 
+    /* 保存候选路径用于错误提示 */
+    char tried_path[512];
+    strncpy(tried_path, cand, sizeof(tried_path)); tried_path[sizeof(tried_path)-1] = '\0';
+
     /* 验证版本 */
-    char code[256];
+    char code[512];
     snprintf(code, sizeof(code),
              "\"%s\" -c \"import sys; exit(0 if sys.version_info[:2]>=("
              STR(MIN_PYTHON_MAJOR) "," STR(MIN_PYTHON_MINOR) ") else 1)\" 2>nul",
@@ -337,6 +341,8 @@ static int find_python(char *buf, size_t sz) {
     if (ret == 0) {
         strncpy(buf, cand, sz); buf[sz-1] = '\0'; return 0;
     }
+    /* 版本不足 — 把路径写入 buf 供调用方显示 */
+    snprintf(buf, sz, "VERFAIL:%s", tried_path);
     return -1;
 
 #else
@@ -503,10 +509,19 @@ int main(int argc, char **argv) {
     /* ── 1. 查找 Python（含版本验证） ── */
     char python[MAX_PATH_LEN] = {0};
     if (find_python(python, sizeof(python)) != 0) {
-        char msg[1024];
-        snprintf(msg, sizeof(msg),
-            "未找到 Python " STR(MIN_PYTHON_MAJOR) "." STR(MIN_PYTHON_MINOR) " 或更高版本。\n\n"
-            "请安装后重试：\n" PROJECT_URL);
+        char msg[1280];
+        if (strncmp(python, "VERFAIL:", 8) == 0) {
+            snprintf(msg, sizeof(msg),
+                "Python 版本过低。\n\n"
+                "找到: %s\n"
+                "需要 >= " STR(MIN_PYTHON_MAJOR) "." STR(MIN_PYTHON_MINOR) "\n\n"
+                "请安装后重试：\n" PROJECT_URL,
+                python + 8);
+        } else {
+            snprintf(msg, sizeof(msg),
+                "未找到 Python " STR(MIN_PYTHON_MAJOR) "." STR(MIN_PYTHON_MINOR) " 或更高版本。\n\n"
+                "请安装后重试：\n" PROJECT_URL);
+        }
         msgbox_error(PROJECT_NAME, msg);
         return 1;
     }
