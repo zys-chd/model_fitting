@@ -221,7 +221,8 @@ class FittingPresenter:
                 samples = self._state.data[col_name].dropna()
             si = next((meta["selector_idx"] for meta in self._state.series_meta
                        if meta["col"] == col_name and meta.get("group") == g), 0)
-            limit = self._view.get_limits()[si] if si < len(self._view.get_limits()) else 0.1
+            styles = self._view.get_series_styles()
+            limit = styles[si].get("limit", 0.1) if si < len(styles) else 0.1
             all_stats[(col_name, g)] = self._stats_service.compute_all(
                 samples.values, model=model, params=params, limit=limit,
                 quantile_low=self._state.quantile_low,
