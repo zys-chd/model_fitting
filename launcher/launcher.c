@@ -102,6 +102,58 @@
 #include <zlib.h>
 #include "config.h"
 
+#ifdef _WIN32
+/* ── 状态提示窗口（白底居中，无按钮，仅 Windows） ── */
+static HWND _stat_wnd = NULL;
+static HFONT _stat_font = NULL;
+
+static void show_status(const char *text) {
+    if (_stat_wnd) {
+        SetWindowTextA(GetDlgItem(_stat_wnd, 100), text);
+        UpdateWindow(_stat_wnd);
+        return;
+    }
+    WNDCLASSA wc = {0};
+    wc.lpfnWndProc = DefWindowProcA;
+    wc.hInstance = GetModuleHandle(NULL);
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    wc.lpszClassName = "MFStatusWnd";
+    RegisterClassA(&wc);
+
+    int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN);
+    int ww = 340, wh = 100;
+    _stat_wnd = CreateWindowExA(WS_EX_TOOLWINDOW, "MFStatusWnd", PROJECT_NAME,
+        WS_POPUP | WS_BORDER, (sw - ww)/2, (sh - wh)/2, ww, wh,
+        NULL, NULL, wc.hInstance, NULL);
+
+    _stat_font = CreateFontA(16, 0, 0, 0, FW_NORMAL, 0, 0, 0,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        DEFAULT_QUALITY, DEFAULT_PITCH, "Microsoft YaHei");
+
+    CreateWindowExA(0, "STATIC", text, WS_CHILD | WS_VISIBLE | SS_CENTER,
+        10, 25, ww - 20, 40, _stat_wnd, (HMENU)100, wc.hInstance, NULL);
+    SendMessageA(GetDlgItem(_stat_wnd, 100), WM_SETFONT, (WPARAM)_stat_font, TRUE);
+
+    ShowWindow(_stat_wnd, SW_SHOW);
+    UpdateWindow(_stat_wnd);
+}
+
+static void hide_status(void) {
+    if (_stat_wnd) {
+        DestroyWindow(_stat_wnd); _stat_wnd = NULL;
+        DeleteObject(_stat_font); _stat_font = NULL;
+    }
+}
+
+static void pump_messages(void) {
+    MSG msg;
+    while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) {
+        TranslateMessage(&msg); DispatchMessageA(&msg);
+    }
+}
+#endif
+
 /* ── 辅助宏 ─────────────────────────────────────────── */
 #define _STR(x) #x
 #define STR(x)  _STR(x)
@@ -584,6 +636,9 @@ int main(int argc, char **argv) {
     }
 
     /* ── 2. 创建临时目录、解压资源 ── */
+#ifdef _WIN32
+    if (is_first_run) { show_status("正在准备运行环境..."); pump_messages(); }
+#endif
     if (create_temp_dir(g_temp_dir, sizeof(g_temp_dir)) != 0) {
         msgbox_error(PROJECT_NAME, "无法创建临时目录。");
         return 1;
@@ -595,6 +650,9 @@ int main(int argc, char **argv) {
 
     /* ── 3-5. 环境检查（仅首次运行） ── */
     if (is_first_run) {
+#ifdef _WIN32
+        show_status("正在检查依赖..."); pump_messages();
+#endif
 #ifndef _WIN32
         if (check_tkinter(python) != 0) {
 #if defined(__APPLE__)
@@ -605,6 +663,9 @@ int main(int argc, char **argv) {
             char msg[1024];
             snprintf(msg, sizeof(msg),
                 "缺少 tkinter 组件。\n\n%s", guide);
+#ifdef _WIN32
+            hide_status();
+#endif
             msgbox_error(PROJECT_NAME, msg);
             return 1;
         }
@@ -621,12 +682,18 @@ int main(int argc, char **argv) {
         }
 
         if (missing_count > 0) {
+#ifdef _WIN32
+            show_status("正在安装依赖..."); pump_messages();
+#endif
             if (pip_install(python, missing) != 0) {
                 char err[1024];
                 snprintf(err, sizeof(err),
                     "依赖安装失败。\n\n"
                     "请手动运行以下命令后重试：\n"
                     "  pip install %s", missing);
+#ifdef _WIN32
+                hide_status();
+#endif
                 msgbox_error(PROJECT_NAME, err);
                 return 1;
             }
@@ -636,6 +703,9 @@ int main(int argc, char **argv) {
                     still_missing++;
             }
             if (still_missing > 0) {
+#ifdef _WIN32
+                hide_status();
+#endif
                 msgbox_error(PROJECT_NAME,
                     "部分依赖安装后仍不可用。\n请检查网络连接后重试。");
                 return 1;
@@ -643,6 +713,9 @@ int main(int argc, char **argv) {
         }
 
         /* 首次检查通过，写标记文件 */
+#ifdef _WIN32
+        hide_status();
+#endif
         FILE *sf = fopen(stamp_path, "w");
         if (sf) { fprintf(sf, "ok\n"); fclose(sf); }
     }
