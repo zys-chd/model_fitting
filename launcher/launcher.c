@@ -103,37 +103,50 @@
 #include "config.h"
 
 #ifdef _WIN32
-/* ── 状态提示窗口（白底居中，无按钮，仅 Windows） ── */
+/* ── 状态提示窗口（Unicode, 白底居中） ── */
 static HWND _stat_wnd = NULL;
 static HFONT _stat_font = NULL;
 
+/* UTF-8 → WCHAR 辅助 */
+static WCHAR *utf8_to_w(const char *s) {
+    if (!s) return NULL;
+    int n = MultiByteToWideChar(CP_UTF8, 0, s, -1, NULL, 0);
+    if (n <= 0) return NULL;
+    WCHAR *w = (WCHAR *)malloc(n * sizeof(WCHAR));
+    if (w) MultiByteToWideChar(CP_UTF8, 0, s, -1, w, n);
+    return w;
+}
+
 static void show_status(const char *text) {
+    WCHAR *wtext = utf8_to_w(text);
     if (_stat_wnd) {
-        SetWindowTextA(GetDlgItem(_stat_wnd, 100), text);
+        if (wtext) { SetWindowTextW(GetDlgItem(_stat_wnd, 100), wtext); free(wtext); }
         UpdateWindow(_stat_wnd);
         return;
     }
-    WNDCLASSA wc = {0};
-    wc.lpfnWndProc = DefWindowProcA;
+    WCHAR *wtitle = utf8_to_w(PROJECT_NAME);
+    WNDCLASSW wc = {0};
+    wc.lpfnWndProc = DefWindowProcW;
     wc.hInstance = GetModuleHandle(NULL);
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
-    wc.lpszClassName = "MFStatusWnd";
-    RegisterClassA(&wc);
+    wc.lpszClassName = L"MFStatusWnd";
+    RegisterClassW(&wc);
 
     int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN);
-    int ww = 340, wh = 100;
-    _stat_wnd = CreateWindowExA(WS_EX_TOOLWINDOW, "MFStatusWnd", PROJECT_NAME,
-        WS_POPUP | WS_BORDER, (sw - ww)/2, (sh - wh)/2, ww, wh,
-        NULL, NULL, wc.hInstance, NULL);
+    _stat_wnd = CreateWindowExW(WS_EX_TOOLWINDOW, L"MFStatusWnd",
+        wtitle ? wtitle : L"", WS_POPUP | WS_BORDER,
+        (sw - 360)/2, (sh - 110)/2, 360, 110, NULL, NULL, wc.hInstance, NULL);
+    free(wtitle);
 
-    _stat_font = CreateFontA(16, 0, 0, 0, FW_NORMAL, 0, 0, 0,
+    _stat_font = CreateFontW(15, 0, 0, 0, FW_NORMAL, 0, 0, 0,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-        DEFAULT_QUALITY, DEFAULT_PITCH, "Microsoft YaHei");
+        DEFAULT_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei");
 
-    CreateWindowExA(0, "STATIC", text, WS_CHILD | WS_VISIBLE | SS_CENTER,
-        10, 25, ww - 20, 40, _stat_wnd, (HMENU)100, wc.hInstance, NULL);
-    SendMessageA(GetDlgItem(_stat_wnd, 100), WM_SETFONT, (WPARAM)_stat_font, TRUE);
+    CreateWindowExW(0, L"STATIC", wtext ? wtext : L"", WS_CHILD | WS_VISIBLE | SS_CENTER,
+        10, 30, 340, 50, _stat_wnd, (HMENU)100, wc.hInstance, NULL);
+    SendMessageW(GetDlgItem(_stat_wnd, 100), WM_SETFONT, (WPARAM)_stat_font, TRUE);
+    free(wtext);
 
     ShowWindow(_stat_wnd, SW_SHOW);
     UpdateWindow(_stat_wnd);
@@ -142,14 +155,14 @@ static void show_status(const char *text) {
 static void hide_status(void) {
     if (_stat_wnd) {
         DestroyWindow(_stat_wnd); _stat_wnd = NULL;
-        DeleteObject(_stat_font); _stat_font = NULL;
+        if (_stat_font) { DeleteObject(_stat_font); _stat_font = NULL; }
     }
 }
 
 static void pump_messages(void) {
     MSG msg;
-    while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) {
-        TranslateMessage(&msg); DispatchMessageA(&msg);
+    while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
+        TranslateMessage(&msg); DispatchMessageW(&msg);
     }
 }
 #endif
@@ -650,9 +663,6 @@ int main(int argc, char **argv) {
 
     /* ── 3-5. 环境检查（仅首次运行） ── */
     if (is_first_run) {
-#ifdef _WIN32
-        show_status("正在检查依赖..."); pump_messages();
-#endif
 #ifndef _WIN32
         if (check_tkinter(python) != 0) {
 #if defined(__APPLE__)
@@ -674,6 +684,11 @@ int main(int argc, char **argv) {
         char missing[2048] = {0};
         int missing_count = 0;
         for (int i = 0; i < REQUIREMENTS_COUNT; i++) {
+#ifdef _WIN32
+            { char prog[128]; snprintf(prog, sizeof(prog),
+                "正在检查 %s (%d/%d)...", REQUIREMENTS[i].import_name, i+1, REQUIREMENTS_COUNT);
+              show_status(prog); pump_messages(); }
+#endif
             if (check_package(python, REQUIREMENTS[i].import_name) != 0) {
                 if (missing_count > 0) strcat(missing, " ");
                 strcat(missing, REQUIREMENTS[i].pip_name);
