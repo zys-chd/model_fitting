@@ -55,16 +55,22 @@ class BasicStatsCalculator(StatCalculator):
             return {}
         q_low = context.get("quantile_low", 5)
         q_high = context.get("quantile_high", 95)
+        q_low_v = float(np.percentile(s, q_low))
+        q_high_v = float(np.percentile(s, q_high))
         mean_v = float(np.mean(s))
         std_v = float(np.std(s, ddof=1)) if n > 1 else 0.0
         cv_pct = (std_v / mean_v * 100) if mean_v != 0 else float('nan')
+        iqr = q_high_v - q_low_v
+        riqr = (iqr / mean_v) if mean_v != 0 else float('nan')
         return {
             "样本数": n,
             "均值": mean_v,
             "标准差": std_v,
             "中位数": float(np.median(s)),
-            f"{q_low:.0f}%分位数": float(np.percentile(s, q_low)),
-            f"{q_high:.0f}%分位数": float(np.percentile(s, q_high)),
+            f"{q_low:.0f}%分位数": q_low_v,
+            f"{q_high:.0f}%分位数": q_high_v,
+            "分位数间距": round(iqr, 4),
+            "相对分位数间距": round(riqr, 4),
             "最小值": float(np.min(s)),
             "最大值": float(np.max(s)),
             "偏度": float(sp_stats.skew(s)),
