@@ -64,15 +64,32 @@ static char g_temp_dir[1024] = {0};
 #define MAX_PATH_LEN    1024
 
 /* ── 跨平台原生对话框 ─────────────────────────────── */
-static void msgbox(const char *title, const char *msg) {
 #ifdef _WIN32
-    MessageBoxA(NULL, msg, title, MB_OK | MB_ICONINFORMATION);
-#elif defined(__APPLE__)
-    char cmd[4096];
-    /* 转义双引号和反斜杠 */
-    char escaped[2048];
-    const char *s = msg;
-    char *d = escaped;
+/* UTF-8 → MessageBoxW（解决中文乱码，MessageBoxA 在 GBK 系统上无法正确显示 UTF-8） */
+static void win_msgbox(const char *title, const char *msg, UINT type) {
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, msg, -1, NULL, 0);
+    int tlen = MultiByteToWideChar(CP_UTF8, 0, title, -1, NULL, 0);
+    if (wlen <= 0) wlen = 1;
+    if (tlen <= 0) tlen = 1;
+    WCHAR *wmsg = (WCHAR *)malloc(wlen * sizeof(WCHAR));
+    WCHAR *wtit = (WCHAR *)malloc(tlen * sizeof(WCHAR));
+    if (wmsg && wtit) {
+        MultiByteToWideChar(CP_UTF8, 0, msg, -1, wmsg, wlen);
+        MultiByteToWideChar(CP_UTF8, 0, title, -1, wtit, tlen);
+        MessageBoxW(NULL, wmsg, wtit, MB_OK | type);
+    }
+    free(wmsg);
+    free(wtit);
+}
+#define msgbox(t,m)       win_msgbox(t, m, MB_ICONINFORMATION)
+#define msgbox_error(t,m) win_msgbox(t, m, MB_ICONERROR)
+
+#else /* ── macOS / Linux ── */
+
+static void msgbox(const char *title, const char *msg) {
+#if defined(__APPLE__)
+    char cmd[4096], escaped[2048];
+    const char *s = msg; char *d = escaped;
     while (*s && (size_t)(d - escaped) < sizeof(escaped) - 2) {
         if (*s == '\\') { *d++ = '\\'; *d++ = '\\'; }
         else if (*s == '"') { *d++ = '\\'; *d++ = '"'; }
@@ -86,28 +103,20 @@ static void msgbox(const char *title, const char *msg) {
              escaped, title);
     system(cmd);
 #else
-    /* Linux: 尝试 zenity / kdialog / xmessage */
     char cmd[4096];
     snprintf(cmd, sizeof(cmd),
              "zenity --info --title=\"%s\" --text=\"%s\" 2>/dev/null || "
              "kdialog --title \"%s\" --msgbox \"%s\" 2>/dev/null || "
              "xmessage -center \"%s\" 2>/dev/null",
              title, msg, title, msg, msg);
-    if (system(cmd) != 0) {
-        /* 最后的 fallback */
-        fprintf(stderr, "[%s] %s\n", title, msg);
-    }
+    if (system(cmd) != 0) fprintf(stderr, "[%s] %s\n", title, msg);
 #endif
 }
 
 static void msgbox_error(const char *title, const char *msg) {
-#ifdef _WIN32
-    MessageBoxA(NULL, msg, title, MB_OK | MB_ICONERROR);
-#elif defined(__APPLE__)
-    char cmd[4096];
-    char escaped[2048];
-    const char *s = msg;
-    char *d = escaped;
+#if defined(__APPLE__)
+    char cmd[4096], escaped[2048];
+    const char *s = msg; char *d = escaped;
     while (*s && (size_t)(d - escaped) < sizeof(escaped) - 2) {
         if (*s == '\\') { *d++ = '\\'; *d++ = '\\'; }
         else if (*s == '"') { *d++ = '\\'; *d++ = '"'; }
@@ -126,11 +135,11 @@ static void msgbox_error(const char *title, const char *msg) {
              "zenity --error --title=\"%s\" --text=\"%s\" 2>/dev/null || "
              "xmessage -center \"%s\" 2>/dev/null",
              title, msg, msg);
-    if (system(cmd) != 0) {
-        fprintf(stderr, "[ERROR] %s: %s\n", title, msg);
-    }
+    if (system(cmd) != 0) fprintf(stderr, "[ERROR] %s: %s\n", title, msg);
 #endif
 }
+
+#endif /* _WIN32 */
 
 /* ── 小端序读取 ────────────────────────────────────── */
 static inline uint16_t read16(const unsigned char *p) {
@@ -269,14 +278,53 @@ static int extract_zip(const unsigned char *data, size_t size, const char *dest)
 
 /* ── 查找 Python ───────────────────────────────────── */
 static int find_python(char *buf, size_t sz) {
+#ifdef _WIN32
+    /* Windows: 先试 py 启动器(选最新), 再试 where python, 最后试常见路径 */
+    const char *cmds[] = {
+        "py -3 2>nul",                           /* Python launcher, 选最新 3.x */
+        "where python 2>nul",
+        "where python3 2>nul",
+        NULL
+    };
+    for (int i = 0; cmds[i]; i++) {
+        FILE *fp = popen(cmds[i], "r");
+        if (!fp) continue;
+        if (fgets(buf, (int)sz, fp)) {
+            size_t len = strlen(buf);
+            while (len > 0 && (buf[len-1] == '\n' || buf[len-1] == '\r')) buf[--len] = '\0';
+            /* py 启动器输出格式: "Python 3.x ..." → 提取第二列 */
+            if (strncmp(cmds[i], "py ", 3) == 0 && buf[0] != 'C') {
+                /* 不是路径，是版本描述，换 where python 查真实路径 */
+                pclose(fp);
+                break;
+            }
+            pclose(fp);
+            if (len > 0 && (buf[0] == 'C' || buf[0] == '/' || buf[1] == ':')) return 0;
+        }
+        pclose(fp);
+    }
+    /* 常见安装路径 */
+    const char *common[] = {
+        "C:\\Python312\\python.exe",
+        "C:\\Python311\\python.exe",
+        "C:\\Python310\\python.exe",
+        "C:\\Program Files\\Python312\\python.exe",
+        "C:\\Program Files\\Python311\\python.exe",
+        "C:\\Program Files\\Python310\\python.exe",
+        NULL
+    };
+    for (int i = 0; common[i]; i++) {
+        if (access(common[i], F_OK) == 0) {
+            strncpy(buf, common[i], sz); buf[sz-1] = '\0'; return 0;
+        }
+    }
+    return -1;
+#else
+    /* macOS / Linux */
     const char *cands[] = {"python3", "python", NULL};
     for (int i = 0; cands[i]; i++) {
         char cmd[512];
-#ifdef _WIN32
-        snprintf(cmd, sizeof(cmd), "where %s 2>nul", cands[i]);
-#else
         snprintf(cmd, sizeof(cmd), "command -v %s 2>/dev/null", cands[i]);
-#endif
         FILE *fp = popen(cmd, "r");
         if (!fp) continue;
         if (fgets(buf, (int)sz, fp)) {
@@ -288,9 +336,8 @@ static int find_python(char *buf, size_t sz) {
         pclose(fp);
     }
     return -1;
+#endif
 }
-
-/* ── 临时目录 ──────────────────────────────────────── */
 static int create_temp_dir(char *buf, size_t sz) {
     const char *tmp = getenv("TMPDIR");
     if (!tmp) tmp = getenv("TEMP");

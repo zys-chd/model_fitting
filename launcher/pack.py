@@ -60,7 +60,7 @@ def read_config():
         print("[错误] 找不到 config.h")
         sys.exit(1)
 
-    content = config_h.read_text()
+    content = config_h.read_text(encoding="utf-8")
     zip_prefix = "model_fitting"
     out_name = "model_fitting"
 
@@ -288,7 +288,7 @@ def compile_launcher():
         # MinGW / Clang on Windows (无命令行窗口)
         flags = [cc, "-O2", "-s", "-o", str(out), str(src),
                  "-lz", "-DRESOURCE_H", f"-I{LAUNCHER_DIR}",
-                 "-mwindows"]
+                 "-mwindows", "-std=c11"]
     else:
         # macOS / Linux
         flags = [cc, "-O2", "-s", "-o", str(out), str(src),
